@@ -3,13 +3,23 @@ package com.jntx.emberbrowser
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.DownloadManager
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.net.http.SslCertificate
+import android.net.http.SslError
+import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.speech.tts.TextToSpeech
+import android.support.v4.media.MediaMetadataCompat
+import android.support.v4.media.session.MediaSessionCompat
+import android.support.v4.media.session.PlaybackStateCompat
 import android.webkit.*
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -20,6 +30,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -61,6 +72,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
+import androidx.core.app.NotificationCompat
 import androidx.lifecycle.lifecycleScope
 import com.jntx.emberbrowser.ui.theme.EmberTheme
 import kotlinx.coroutines.Dispatchers
@@ -71,20 +83,78 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
+import java.io.ByteArrayOutputStream
 import java.util.*
 
 class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     private var tts: TextToSpeech? = null
+    private var mediaSession: MediaSessionCompat? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         tts = TextToSpeech(this, this)
+        setupMediaSession()
+        createNotificationChannel()
+        
         val database = AppDatabase.getDatabase(this)
         setContent {
             EmberTheme {
-                BrowserApp(database, ::speak)
+                BrowserApp(database, ::speak, ::updateMediaStatus)
             }
         }
+    }
+
+    private fun setupMediaSession() {
+        mediaSession = MediaSessionCompat(this, "EmberMediaSession").apply {
+            setFlags(MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS or MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS)
+            isActive = true
+        }
+    }
+
+    private fun updateMediaStatus(title: String, url: String, isPlaying: Boolean) {
+        val session = mediaSession ?: return
+        val state = if (isPlaying) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED
+        session.setPlaybackState(PlaybackStateCompat.Builder()
+            .setState(state, PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN, 1.0f)
+            .setActions(PlaybackStateCompat.ACTION_PLAY_PAUSE or PlaybackStateCompat.ACTION_STOP)
+            .build())
+        
+        session.setMetadata(MediaMetadataCompat.Builder()
+            .putString(MediaMetadataCompat.METADATA_KEY_TITLE, title)
+            .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, "Ember Browser")
+            .build())
+
+        showMediaNotification(title, isPlaying)
+    }
+
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel("ember_media", "Media Playback", NotificationManager.IMPORTANCE_LOW)
+            val manager = getSystemService(NotificationManager::class.java)
+            manager?.createNotificationChannel(channel)
+        }
+    }
+
+    private fun showMediaNotification(title: String, isPlaying: Boolean) {
+        val session = mediaSession ?: return
+        val manager = getSystemService(NotificationManager::class.java) as NotificationManager
+        
+        if (!isPlaying) {
+            manager.cancel(1)
+            return
+        }
+
+        val notification = NotificationCompat.Builder(this, "ember_media")
+            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setContentTitle(title)
+            .setContentText("Playing in Ember")
+            .setOngoing(true)
+            .setStyle(androidx.media.app.NotificationCompat.MediaStyle()
+                .setMediaSession(session.sessionToken)
+                .setShowActionsInCompactView(0))
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .build()
+        manager.notify(1, notification)
     }
 
     override fun onInit(status: Int) {
@@ -100,6 +170,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     override fun onDestroy() {
         tts?.stop()
         tts?.shutdown()
+        mediaSession?.release()
         super.onDestroy()
     }
 }
@@ -111,9 +182,21 @@ class TtsInterface(private val onSpeak: (String) -> Unit) {
     }
 }
 
+fun Bitmap.toByteArray(): ByteArray {
+    val stream = ByteArrayOutputStream()
+    this.compress(Bitmap.CompressFormat.PNG, 100, stream)
+    return stream.toByteArray()
+}
+
+fun ByteArray.toBitmap(): Bitmap? {
+    return BitmapFactory.decodeByteArray(this, 0, this.size)
+}
+
+val sp12 = androidx.compose.ui.text.TextStyle(fontSize = 12.sp)
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-fun BrowserApp(database: AppDatabase, onSpeak: (String) -> Unit) {
+fun BrowserApp(database: AppDatabase, onSpeak: (String) -> Unit, onMediaStatus: (String, String, Boolean) -> Unit) {
     var tabs by remember { mutableStateOf(listOf(TabItem())) }
     var selectedTabIndex by remember { mutableIntStateOf(0) }
     var showTabManager by remember { mutableStateOf(false) }
@@ -122,20 +205,21 @@ fun BrowserApp(database: AppDatabase, onSpeak: (String) -> Unit) {
     var showDownloads by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var showSecurityInfo by remember { mutableStateOf(false) }
+    var showSettingsScreen by remember { mutableStateOf(false) }
     
     val context = LocalContext.current
     val sharedPrefs = remember { context.getSharedPreferences("ember_prefs", Context.MODE_PRIVATE) }
     
-    var customHomepageUrl by remember { 
-        mutableStateOf(sharedPrefs.getString("homepage_url", "") ?: "") 
-    }
-    var downloadPath by remember {
-        mutableStateOf(sharedPrefs.getString("download_path", Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).absolutePath) ?: "")
-    }
+    var customHomepageUrl by remember { mutableStateOf(sharedPrefs.getString("homepage_url", "") ?: "") }
+    var downloadPath by remember { mutableStateOf(sharedPrefs.getString("download_path", Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).absolutePath) ?: "") }
+    var enhancedProtection by remember { mutableStateOf(sharedPrefs.getBoolean("enhanced_protection", true)) }
+    var searchEngine by remember { mutableStateOf(sharedPrefs.getString("search_engine", "Google") ?: "Google") }
+    var isAdBlockerEnabled by remember { mutableStateOf(sharedPrefs.getBoolean("ad_blocker_enabled", true)) }
+    
     var downloadUrl by remember { mutableStateOf("") }
     var showDownloadDialog by remember { mutableStateOf(false) }
-    
     var permissionRequest by remember { mutableStateOf<Pair<PermissionRequest, String>?>(null) }
+    var imageContextMenu by remember { mutableStateOf<String?>(null) }
     
     val currentTab = tabs.getOrNull(selectedTabIndex) ?: TabItem()
     val scope = rememberCoroutineScope()
@@ -151,6 +235,15 @@ fun BrowserApp(database: AppDatabase, onSpeak: (String) -> Unit) {
     var isRefreshing by remember { mutableStateOf(false) }
 
     var suggestionJob: Job? = null
+
+    fun getSearchUrl(query: String): String {
+        return when (searchEngine) {
+            "Brave" -> "https://search.brave.com/search?q=$query"
+            "DuckDuckGo" -> "https://duckduckgo.com/?q=$query"
+            "Bing" -> "https://www.bing.com/search?q=$query"
+            else -> "https://www.google.com/search?q=$query"
+        }
+    }
 
     fun fetchAddressSuggestions(query: String) {
         suggestionJob?.cancel()
@@ -186,7 +279,7 @@ fun BrowserApp(database: AppDatabase, onSpeak: (String) -> Unit) {
         showAddressSuggestions = false
     }
 
-    BackHandler(enabled = !showTabManager && !showHistory && !showBookmarks && !showDownloads && !showSettings && !showSecurityInfo && permissionRequest == null) {
+    BackHandler(enabled = !showTabManager && !showHistory && !showBookmarks && !showDownloads && !showSettings && !showSecurityInfo && !showSettingsScreen && permissionRequest == null && imageContextMenu == null) {
         if (webView?.canGoBack() == true) {
             webView?.goBack()
         } else if (currentTab.url != "home") {
@@ -201,16 +294,20 @@ fun BrowserApp(database: AppDatabase, onSpeak: (String) -> Unit) {
     ) { _ -> }
 
     LaunchedEffect(Unit) {
-        permissionLauncher.launch(arrayOf(
+        val perms = mutableListOf(
             Manifest.permission.CAMERA,
             Manifest.permission.RECORD_AUDIO,
             Manifest.permission.ACCESS_FINE_LOCATION
-        ))
+        )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            perms.add(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        permissionLauncher.launch(perms.toTypedArray())
     }
 
     Scaffold(
         topBar = {
-            if (!showTabManager && currentTab.url != "home") {
+            if (!showTabManager && !showSettingsScreen && currentTab.url != "home") {
                 Column {
                     TopAppBar(
                         navigationIcon = {
@@ -245,9 +342,9 @@ fun BrowserApp(database: AppDatabase, onSpeak: (String) -> Unit) {
                                     keyboardActions = KeyboardActions(
                                         onGo = {
                                             val query = addressBarText
-                                            val finalUrl = if (query.startsWith("http")) query 
+                                            val finalUrl = if (query.startsWith("http") || query.startsWith("file://")) query 
                                                           else if (query.contains(".") && !query.contains(" ")) "https://$query"
-                                                          else "https://www.google.com/search?q=$query"
+                                                          else getSearchUrl(query)
                                             
                                             tabs = tabs.toMutableList().apply {
                                                 this[selectedTabIndex] = this[selectedTabIndex].copy(url = finalUrl)
@@ -299,9 +396,9 @@ fun BrowserApp(database: AppDatabase, onSpeak: (String) -> Unit) {
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(horizontal = 16.dp)
-                                    .shadow(8.dp, RoundedCornerShape(12.dp)),
+                                    .shadow(8.dp, RoundedCornerShape(bottomStart = 16.dp, bottomEnd = 16.dp)),
                                 color = MaterialTheme.colorScheme.surface,
-                                shape = RoundedCornerShape(12.dp)
+                                shape = RoundedCornerShape(bottomStart = 16.dp, bottomEnd = 16.dp)
                             ) {
                                 LazyColumn(modifier = Modifier.heightIn(max = 300.dp)) {
                                     items(addressSuggestions) { suggestion ->
@@ -309,15 +406,14 @@ fun BrowserApp(database: AppDatabase, onSpeak: (String) -> Unit) {
                                             headlineContent = { Text(suggestion) },
                                             modifier = Modifier.clickable {
                                                 addressBarText = suggestion
-                                                val finalUrl = if (suggestion.startsWith("http")) suggestion 
-                                                              else "https://www.google.com/search?q=$suggestion"
+                                                val finalUrl = getSearchUrl(suggestion)
                                                 tabs = tabs.toMutableList().apply {
                                                     this[selectedTabIndex] = this[selectedTabIndex].copy(url = finalUrl)
                                                 }
                                                 focusManager.clearFocus()
                                                 showAddressSuggestions = false
                                             },
-                                            leadingContent = { Icon(Icons.Default.Search, null, modifier = Modifier.size(18.dp), tint = Color.Gray) }
+                                            leadingContent = { Icon(Icons.Default.Search, null, tint = Color.Gray, modifier = Modifier.size(18.dp)) }
                                         )
                                     }
                                 }
@@ -328,106 +424,79 @@ fun BrowserApp(database: AppDatabase, onSpeak: (String) -> Unit) {
             }
         },
         bottomBar = {
-            if (!showTabManager) {
-                Surface(
-                    tonalElevation = 2.dp,
-                    shadowElevation = 8.dp,
-                    color = MaterialTheme.colorScheme.surface
+            if (!showTabManager && !showSettingsScreen) {
+                BottomAppBar(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    contentPadding = PaddingValues(horizontal = 4.dp),
+                    modifier = Modifier.height(56.dp).shadow(8.dp)
                 ) {
                     Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .navigationBarsPadding()
-                            .height(56.dp),
-                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceAround,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        IconButton(onClick = { webView?.goBack() }) { 
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, null, modifier = Modifier.size(24.dp)) 
+                        IconButton(onClick = { if (webView?.canGoBack() == true) webView?.goBack() }) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", modifier = Modifier.size(24.dp))
                         }
-                        IconButton(onClick = { webView?.goForward() }) { 
-                            Icon(Icons.AutoMirrored.Filled.ArrowForward, null, modifier = Modifier.size(24.dp)) 
+                        IconButton(onClick = { if (webView?.canGoForward() == true) webView?.goForward() }) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowForward, "Forward", modifier = Modifier.size(24.dp))
+                        }
+                        IconButton(onClick = { showSettings = true }) {
+                            Icon(Icons.Default.Menu, "Menu", modifier = Modifier.size(24.dp))
+                        }
+                        IconButton(onClick = { showTabManager = true }) {
+                            Box(
+                                modifier = Modifier
+                                    .size(22.dp)
+                                    .border(1.8.dp, MaterialTheme.colorScheme.onSurface, RoundedCornerShape(4.dp)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = tabs.size.toString(),
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
                         }
                         IconButton(onClick = { 
                             tabs = tabs.toMutableList().apply {
                                 this[selectedTabIndex] = this[selectedTabIndex].copy(url = "home")
                             }
-                        }) { Icon(Icons.Outlined.Home, null) }
-                        
-                        IconButton(onClick = { showTabManager = true }) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(Icons.Outlined.Layers, null)
-                                Text(
-                                    text = tabs.size.toString(),
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.padding(top = 2.dp)
-                                )
-                            }
+                        }) {
+                            Icon(Icons.Default.Home, "Home", modifier = Modifier.size(24.dp))
                         }
-                        IconButton(onClick = { showSettings = true }) { Icon(Icons.Default.Menu, null) }
                     }
                 }
             }
         }
-    ) { padding ->
-        Box(modifier = Modifier.padding(padding)) {
+    ) { paddingValues ->
+        Box(modifier = Modifier.padding(paddingValues).fillMaxSize()) {
             if (currentTab.url == "home") {
-                if (customHomepageUrl.isEmpty()) {
-                    HomeScreen(
-                        onSearch = { query: String ->
-                            val finalUrl = if (query.startsWith("http")) query 
-                                          else if (query.contains(".") && !query.contains(" ")) "https://$query"
-                                          else "https://www.google.com/search?q=$query"
-                            tabs = tabs.toMutableList().apply {
-                                this[selectedTabIndex] = this[selectedTabIndex].copy(url = finalUrl)
-                            }
-                        },
-                        onConfigureHomepage = { 
-                            customHomepageUrl = it
-                            sharedPrefs.edit().putString("homepage_url", it).apply()
+                HomeScreen(
+                    onSearch = { query ->
+                        val finalUrl = if (query.startsWith("http") || query.startsWith("file://")) query 
+                                      else if (query.contains(".") && !query.contains(" ")) "https://$query"
+                                      else getSearchUrl(query)
+                        tabs = tabs.toMutableList().apply {
+                            this[selectedTabIndex] = this[selectedTabIndex].copy(url = finalUrl)
                         }
-                    )
-                } else {
-                    BrowserWebViewContainer(
-                        url = customHomepageUrl,
-                        onPageFinished = { newUrl, title ->
-                             tabs = tabs.toMutableList().apply {
-                                this[selectedTabIndex] = this[selectedTabIndex].copy(url = newUrl, title = title ?: newUrl)
-                            }
-                            isRefreshing = false
-                        },
-                        onDownloadRequested = { url ->
-                            downloadUrl = url
-                            showDownloadDialog = true
-                        },
-                        onWebViewCreated = { webView = it },
-                        onSpeak = onSpeak,
-                        onProgressChanged = { loadingProgress = it },
-                        isRefreshing = isRefreshing,
-                        onRefresh = { 
-                            isRefreshing = true
-                            webView?.reload() 
-                        },
-                        onFaviconChanged = { icon ->
-                            tabs = tabs.toMutableList().apply {
-                                this[selectedTabIndex] = this[selectedTabIndex].copy(favicon = icon)
-                            }
-                        },
-                        onPermissionRequested = { request, url -> permissionRequest = request to url }
-                    )
-                }
+                    },
+                    onConfigureHomepage = { url ->
+                        customHomepageUrl = url
+                        sharedPrefs.edit().putString("homepage_url", url).apply()
+                    }
+                )
             } else {
                 BrowserWebViewContainer(
                     url = currentTab.url,
-                    onPageFinished = { newUrl, title ->
+                    onPageFinished = { url, title ->
                         tabs = tabs.toMutableList().apply {
-                            this[selectedTabIndex] = this[selectedTabIndex].copy(url = newUrl, title = title ?: newUrl)
+                            this[selectedTabIndex] = this[selectedTabIndex].copy(url = url, title = title ?: url)
                         }
                         scope.launch {
-                            database.browserDao().insertHistory(HistoryItem(url = newUrl, title = title ?: newUrl))
+                            database.browserDao().insertHistory(HistoryItem(url = url, title = title ?: url))
                         }
-                        isRefreshing = false
                     },
                     onDownloadRequested = { url ->
                         downloadUrl = url
@@ -439,14 +508,99 @@ fun BrowserApp(database: AppDatabase, onSpeak: (String) -> Unit) {
                     isRefreshing = isRefreshing,
                     onRefresh = { 
                         isRefreshing = true
-                        webView?.reload() 
+                        webView?.reload()
+                        scope.launch { delay(1000); isRefreshing = false }
                     },
-                    onFaviconChanged = { icon ->
+                    onFaviconChanged = { bitmap ->
                         tabs = tabs.toMutableList().apply {
-                            this[selectedTabIndex] = this[selectedTabIndex].copy(favicon = icon)
+                            this[selectedTabIndex] = this[selectedTabIndex].copy(favicon = bitmap)
                         }
                     },
-                    onPermissionRequested = { request, url -> permissionRequest = request to url }
+                    onPermissionRequested = { request, url ->
+                        permissionRequest = request to url
+                    },
+                    onImageLongClick = { url ->
+                        imageContextMenu = url
+                    },
+                    enhancedProtection = enhancedProtection,
+                    onMediaStatus = onMediaStatus,
+                    isAdBlockerEnabled = isAdBlockerEnabled
+                )
+            }
+
+            if (showTabManager) {
+                TabManagerView(
+                    tabs = tabs,
+                    selectedIndex = selectedTabIndex,
+                    onTabSelected = { index -> selectedTabIndex = index; showTabManager = false },
+                    onTabClosed = { index ->
+                        val newList = tabs.toMutableList().apply { removeAt(index) }
+                        if (newList.isEmpty()) {
+                            tabs = listOf(TabItem())
+                            selectedTabIndex = 0
+                        } else {
+                            tabs = newList
+                            if (selectedTabIndex >= tabs.size) selectedTabIndex = tabs.size - 1
+                        }
+                    },
+                    onNewTab = {
+                        tabs = tabs + TabItem()
+                        selectedTabIndex = tabs.size - 1
+                        showTabManager = false
+                    },
+                    onClose = { showTabManager = false }
+                )
+            }
+
+            if (showHistory) {
+                val historyItems by database.browserDao().getAllHistory().collectAsState(initial = emptyList())
+                HistoryDialog(
+                    items = historyItems,
+                    onUrlClick = { url ->
+                        tabs = tabs.toMutableList().apply {
+                            this[selectedTabIndex] = this[selectedTabIndex].copy(url = url)
+                        }
+                        showHistory = false
+                        showSettings = false
+                    },
+                    onDismiss = { showHistory = false },
+                    onClearHistory = { scope.launch { database.browserDao().clearHistory() } }
+                )
+            }
+
+            if (showBookmarks) {
+                val bookmarkItems by database.browserDao().getAllBookmarks().collectAsState(initial = emptyList())
+                BookmarkDialog(
+                    items = bookmarkItems,
+                    onUrlClick = { url ->
+                        tabs = tabs.toMutableList().apply {
+                            this[selectedTabIndex] = this[selectedTabIndex].copy(url = url)
+                        }
+                        showBookmarks = false
+                        showSettings = false
+                    },
+                    onDismiss = { showBookmarks = false },
+                    onAddBookmark = {
+                        scope.launch {
+                            database.browserDao().insertBookmark(BookmarkItem(url = currentTab.url, title = currentTab.title, favicon = currentTab.favicon?.toByteArray()))
+                        }
+                    },
+                    onDeleteBookmark = { id -> scope.launch { database.browserDao().deleteBookmark(id) } }
+                )
+            }
+
+            if (showDownloads) {
+                val downloadItems by database.browserDao().getAllDownloads().collectAsState(initial = emptyList())
+                DownloadManagerDialog(items = downloadItems, onDismiss = { showDownloads = false })
+            }
+
+            if (showSettings) {
+                SettingsMenu(
+                    onDismiss = { showSettings = false },
+                    onHistory = { showHistory = true },
+                    onDownloads = { showDownloads = true },
+                    onBookmarks = { showBookmarks = true },
+                    onOpenSettings = { showSettingsScreen = true; showSettings = false }
                 )
             }
 
@@ -456,13 +610,10 @@ fun BrowserApp(database: AppDatabase, onSpeak: (String) -> Unit) {
                     certificate = webView?.certificate,
                     onDismiss = { showSecurityInfo = false },
                     onClearSiteData = {
-                        val uri = Uri.parse(currentTab.url)
-                        val origin = "${uri.scheme}://${uri.host}"
-                        WebStorage.getInstance().deleteOrigin(origin)
-                        CookieManager.getInstance().setCookie(origin, "")
-                        webView?.reload()
+                        WebStorage.getInstance().deleteOrigin(Uri.parse(currentTab.url).host)
+                        webView?.clearCache(true)
                         showSecurityInfo = false
-                        Toast.makeText(context, "Site data cleared", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "Datos del sitio borrados", Toast.LENGTH_SHORT).show()
                     }
                 )
             }
@@ -479,118 +630,76 @@ fun BrowserApp(database: AppDatabase, onSpeak: (String) -> Unit) {
                 )
             }
 
-            if (permissionRequest != null) {
-                val request = permissionRequest!!.first
-                val url = permissionRequest!!.second
+            imageContextMenu?.let { url ->
                 AlertDialog(
-                    onDismissRequest = { request.deny(); permissionRequest = null },
-                    title = { Text("Permission Requested") },
-                    text = { Text("$url wants to use: ${request.resources.joinToString(", ")}") },
-                    confirmButton = { Button(onClick = { request.grant(request.resources); permissionRequest = null }) { Text("Allow") } },
-                    dismissButton = { TextButton(onClick = { request.deny(); permissionRequest = null }) { Text("Deny") } }
-                )
-            }
-
-            if (showTabManager) {
-                TabManagerView(
-                    tabs = tabs,
-                    selectedIndex = selectedTabIndex,
-                    onTabSelected = { index -> selectedTabIndex = index; showTabManager = false },
-                    onTabClosed = { index ->
-                        if (tabs.size > 1) {
-                            tabs = tabs.toMutableList().apply { removeAt(index) }
-                            if (selectedTabIndex >= tabs.size) selectedTabIndex = tabs.size - 1
-                        } else {
-                            tabs = listOf(TabItem())
-                            selectedTabIndex = 0
-                        }
+                    onDismissRequest = { imageContextMenu = null },
+                    title = { Text("Opciones de imagen") },
+                    text = { Text(url) },
+                    confirmButton = {
+                        TextButton(onClick = { 
+                            downloadUrl = url
+                            showDownloadDialog = true
+                            imageContextMenu = null
+                        }) { Text("Descargar imagen") }
                     },
-                    onNewTab = {
-                        tabs = tabs + TabItem(url = "home")
-                        selectedTabIndex = tabs.size - 1
-                        showTabManager = false
+                    dismissButton = {
+                        TextButton(onClick = { imageContextMenu = null }) { Text("Cancelar") }
+                    }
+                )
+            }
+
+            permissionRequest?.let { (request, origin) ->
+                AlertDialog(
+                    onDismissRequest = { permissionRequest = null },
+                    title = { Text("Permiso solicitado") },
+                    text = { Text("El sitio $origin solicita acceso a: ${request.resources.joinToString()}") },
+                    confirmButton = {
+                        Button(onClick = { request.grant(request.resources); permissionRequest = null }) { Text("Permitir") }
                     },
-                    onClose = { showTabManager = false }
-                )
-            }
-
-            if (showHistory) {
-                var historyItems by remember { mutableStateOf(listOf<HistoryItem>()) }
-                LaunchedEffect(Unit) { historyItems = database.browserDao().getAllHistory() }
-                HistoryDialog(
-                    items = historyItems, 
-                    onUrlClick = { url -> 
-                        tabs = tabs.toMutableList().apply { this[selectedTabIndex] = this[selectedTabIndex].copy(url = url) }
-                        showHistory = false 
-                    }, 
-                    onDismiss = { showHistory = false },
-                    onClearHistory = {
-                        scope.launch {
-                            database.browserDao().clearHistory()
-                            historyItems = emptyList()
-                        }
+                    dismissButton = {
+                        TextButton(onClick = { request.deny(); permissionRequest = null }) { Text("Denegar") }
                     }
                 )
             }
-            
-            if (showBookmarks) {
-                var bookmarkItems by remember { mutableStateOf(listOf<BookmarkItem>()) }
-                LaunchedEffect(Unit) { bookmarkItems = database.browserDao().getAllBookmarks() }
-                BookmarkDialog(items = bookmarkItems, onUrlClick = { url ->
-                    tabs = tabs.toMutableList().apply { this[selectedTabIndex] = this[selectedTabIndex].copy(url = url) }
-                    showBookmarks = false
-                }, onDismiss = { showBookmarks = false }, onAddBookmark = {
-                    scope.launch {
-                        database.browserDao().insertBookmark(BookmarkItem(url = currentTab.url, title = currentTab.title))
-                        bookmarkItems = database.browserDao().getAllBookmarks()
-                    }
-                }, onDeleteBookmark = { id ->
-                    scope.launch {
-                        database.browserDao().deleteBookmark(id)
-                        bookmarkItems = database.browserDao().getAllBookmarks()
-                    }
-                })
-            }
 
-            if (showDownloads) {
-                var downloadItems by remember { mutableStateOf(listOf<DownloadItem>()) }
-                LaunchedEffect(Unit) { downloadItems = database.browserDao().getAllDownloads() }
-                DownloadManagerDialog(items = downloadItems, onDismiss = { showDownloads = false })
-            }
-
-            if (showSettings) {
-                SettingsMenu(
-                    onDismiss = { showSettings = false },
-                    onHistory = { showHistory = true; showSettings = false },
-                    onDownloads = { showDownloads = true; showSettings = false },
-                    onBookmarks = { showBookmarks = true; showSettings = false },
-                    onResetHomepage = { 
+            if (showSettingsScreen) {
+                SettingsScreen(
+                    enhancedProtection = enhancedProtection,
+                    onEnhancedProtectionChange = {
+                        enhancedProtection = it
+                        sharedPrefs.edit().putBoolean("enhanced_protection", it).apply()
+                    },
+                    searchEngine = searchEngine,
+                    onSearchEngineChange = {
+                        searchEngine = it
+                        sharedPrefs.edit().putString("search_engine", it).apply()
+                    },
+                    onResetHome = {
                         customHomepageUrl = ""
                         sharedPrefs.edit().remove("homepage_url").apply()
                     },
                     onClearData = {
-                        WebStorage.getInstance().deleteAllData()
-                        CookieManager.getInstance().removeAllCookies(null)
-                        CookieManager.getInstance().flush()
                         webView?.clearCache(true)
-                        webView?.clearFormData()
                         webView?.clearHistory()
-                        Toast.makeText(context, "Cookies and Site Data cleared", Toast.LENGTH_SHORT).show()
+                        webView?.clearFormData()
+                        CookieManager.getInstance().removeAllCookies(null)
+                        Toast.makeText(context, "Todos los datos borrados", Toast.LENGTH_SHORT).show()
+                    },
+                    onBack = { showSettingsScreen = false },
+                    downloadPath = downloadPath,
+                    onDownloadPathChange = {
+                        downloadPath = it
+                        sharedPrefs.edit().putString("download_path", it).apply()
                     },
                     onReadPage = {
-                        webView?.evaluateJavascript(
-                            "(function() { return document.body.innerText; })();"
-                        ) { text ->
-                            val cleanText = text?.trim()?.removeSurrounding("\"")?.replace("\\n", "\n") ?: ""
-                            if (cleanText.isNotEmpty()) {
-                                onSpeak(cleanText)
-                            }
+                        webView?.evaluateJavascript("(function() { return document.body.innerText; })();") { text ->
+                            onSpeak(text ?: "No se pudo leer el contenido")
                         }
                     },
-                    downloadPath = downloadPath,
-                    onDownloadPathChange = { path -> 
-                        downloadPath = path
-                        sharedPrefs.edit().putString("download_path", path).apply()
+                    isAdBlockerEnabled = isAdBlockerEnabled,
+                    onAdBlockerChange = {
+                        isAdBlockerEnabled = it
+                        sharedPrefs.edit().putBoolean("ad_blocker_enabled", it).apply()
                     }
                 )
             }
@@ -632,6 +741,86 @@ fun SecurityDialog(url: String, certificate: SslCertificate?, onDismiss: () -> U
     )
 }
 
+@Composable
+fun SettingsScreen(
+    enhancedProtection: Boolean,
+    onEnhancedProtectionChange: (Boolean) -> Unit,
+    searchEngine: String,
+    onSearchEngineChange: (String) -> Unit,
+    onResetHome: () -> Unit,
+    onClearData: () -> Unit,
+    onBack: () -> Unit,
+    downloadPath: String,
+    onDownloadPathChange: (String) -> Unit,
+    onReadPage: () -> Unit,
+    isAdBlockerEnabled: Boolean,
+    onAdBlockerChange: (Boolean) -> Unit
+) {
+    Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+        Column(modifier = Modifier.padding(16.dp).verticalScroll(rememberScrollState())) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null) }
+                Text("Settings", style = MaterialTheme.typography.headlineMedium)
+            }
+            Spacer(Modifier.height(24.dp))
+            
+            Text("General", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+            ListItem(
+                headlineContent = { Text("Search Engine") },
+                supportingContent = { Text(searchEngine) },
+                leadingContent = { Icon(Icons.Default.Search, null) },
+                modifier = Modifier.clickable {
+                    val engines = listOf("Google", "Brave", "DuckDuckGo", "Bing")
+                    val next = engines[(engines.indexOf(searchEngine) + 1) % engines.size]
+                    onSearchEngineChange(next)
+                }
+            )
+            
+            ListItem(
+                headlineContent = { Text("Ad-Blocker") },
+                supportingContent = { Text("Block annoying ads and trackers") },
+                trailingContent = { Switch(checked = isAdBlockerEnabled, onCheckedChange = onAdBlockerChange) }
+            )
+
+            ListItem(
+                headlineContent = { Text("Read Current Page") },
+                leadingContent = { Icon(Icons.Default.RecordVoiceOver, null) },
+                modifier = Modifier.clickable { onReadPage() }
+            )
+
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            Text("Security", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+            ListItem(
+                headlineContent = { Text("Enhanced Protection") },
+                supportingContent = { Text("Block non-HTTPS and invalid certificates") },
+                trailingContent = { Switch(checked = enhancedProtection, onCheckedChange = onEnhancedProtectionChange) }
+            )
+            ListItem(
+                headlineContent = { Text("Clear All Browsing Data") },
+                leadingContent = { Icon(Icons.Default.DeleteForever, null) },
+                modifier = Modifier.clickable { onClearData() }
+            )
+
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            Text("Downloads", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+            OutlinedTextField(
+                value = downloadPath,
+                onValueChange = onDownloadPathChange,
+                label = { Text("Download Path") },
+                modifier = Modifier.fillMaxWidth(),
+                textStyle = sp12
+            )
+
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            Text("Advanced", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+            ListItem(
+                headlineContent = { Text("Reset Homepage") },
+                modifier = Modifier.clickable { onResetHome() }
+            )
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BrowserWebViewContainer(
@@ -644,7 +833,11 @@ fun BrowserWebViewContainer(
     isRefreshing: Boolean,
     onRefresh: () -> Unit,
     onFaviconChanged: (Bitmap?) -> Unit,
-    onPermissionRequested: (PermissionRequest, String) -> Unit
+    onPermissionRequested: (PermissionRequest, String) -> Unit,
+    onImageLongClick: (String) -> Unit,
+    enhancedProtection: Boolean,
+    onMediaStatus: (String, String, Boolean) -> Unit,
+    isAdBlockerEnabled: Boolean
 ) {
     val pullToRefreshState = rememberPullToRefreshState()
     
@@ -662,7 +855,11 @@ fun BrowserWebViewContainer(
             onSpeak = onSpeak,
             onProgressChanged = onProgressChanged,
             onFaviconChanged = onFaviconChanged,
-            onPermissionRequested = onPermissionRequested
+            onPermissionRequested = onPermissionRequested,
+            onImageLongClick = onImageLongClick,
+            enhancedProtection = enhancedProtection,
+            onMediaStatus = onMediaStatus,
+            isAdBlockerEnabled = isAdBlockerEnabled
         )
     }
 }
@@ -677,13 +874,17 @@ fun BrowserWebView(
     onSpeak: (String) -> Unit,
     onProgressChanged: (Int) -> Unit,
     onFaviconChanged: (Bitmap?) -> Unit,
-    onPermissionRequested: (PermissionRequest, String) -> Unit
+    onPermissionRequested: (PermissionRequest, String) -> Unit,
+    onImageLongClick: (String) -> Unit,
+    enhancedProtection: Boolean,
+    onMediaStatus: (String, String, Boolean) -> Unit,
+    isAdBlockerEnabled: Boolean
 ) {
     var errorInfo by remember { mutableStateOf<String?>(null) }
     var isBlockedBySecurity by remember { mutableStateOf(false) }
     
-    LaunchedEffect(url) {
-        if (!url.startsWith("https://") && url != "home" && !url.startsWith("file://") && !url.startsWith("about:")) {
+    LaunchedEffect(url, enhancedProtection) {
+        if (enhancedProtection && !url.startsWith("https://") && url != "home" && !url.startsWith("file://") && !url.startsWith("about:")) {
             isBlockedBySecurity = true
         } else {
             isBlockedBySecurity = false
@@ -705,22 +906,34 @@ fun BrowserWebView(
                     javaScriptCanOpenWindowsAutomatically = true; allowFileAccess = true
                     cacheMode = WebSettings.LOAD_DEFAULT
                     databaseEnabled = true
+                    mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                    userAgentString = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
                 }
                 
                 addJavascriptInterface(TtsInterface(onSpeak), "EmberTTS")
                 
+                setOnLongClickListener {
+                    val result = hitTestResult
+                    if (result.type == WebView.HitTestResult.IMAGE_TYPE || result.type == WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE) {
+                        result.extra?.let { onImageLongClick(it) }
+                        true
+                    } else false
+                }
+                
                 setDownloadListener { downloadUrl, _, _, _, _ -> onDownloadRequested(downloadUrl) }
                 webViewClient = object : WebViewClient() {
                     override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
-                        val adDomains = listOf(
-                            "doubleclick.net", "googleadservices.com", "googlesyndication.com",
-                            "moatads.com", "adservice.google.com", "pagead2.googlesyndication.com",
-                            "static.doubleclick.net", "ad.doubleclick.net"
-                        )
-                        val urlString = request?.url?.toString() ?: ""
-                        for (domain in adDomains) {
-                            if (urlString.contains(domain)) {
-                                return WebResourceResponse("text/plain", "utf-8", null)
+                        if (isAdBlockerEnabled) {
+                            val adDomains = listOf(
+                                "doubleclick.net", "googleadservices.com", "googlesyndication.com",
+                                "moatads.com", "adservice.google.com", "pagead2.googlesyndication.com",
+                                "static.doubleclick.net", "ad.doubleclick.net"
+                            )
+                            val urlString = request?.url?.toString() ?: ""
+                            for (domain in adDomains) {
+                                if (urlString.contains(domain)) {
+                                    return WebResourceResponse("text/plain", "utf-8", null)
+                                }
                             }
                         }
                         return super.shouldInterceptRequest(view, request)
@@ -730,6 +943,7 @@ fun BrowserWebView(
                         super.onPageFinished(view, url)
                         if (errorInfo == null && !isBlockedBySecurity) {
                             url?.let { onPageFinished(it, view?.title) }
+                            onMediaStatus(view?.title ?: "Ember Browser", url ?: "", true)
                             view?.evaluateJavascript("""
                                 (function() {
                                     if (!window.speechSynthesis) {
@@ -753,8 +967,12 @@ fun BrowserWebView(
                     }
 
                     override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: android.net.http.SslError?) {
-                        isBlockedBySecurity = true
-                        handler?.cancel()
+                        if (enhancedProtection) {
+                            isBlockedBySecurity = true
+                            handler?.cancel()
+                        } else {
+                            handler?.proceed()
+                        }
                     }
 
                     override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
@@ -869,48 +1087,23 @@ fun TabManagerView(tabs: List<TabItem>, selectedIndex: Int, onTabSelected: (Int)
 }
 
 @Composable
-fun SettingsMenu(onDismiss: () -> Unit, onHistory: () -> Unit, onDownloads: () -> Unit, onBookmarks: () -> Unit, onResetHomepage: () -> Unit, onClearData: () -> Unit, onReadPage: () -> Unit, downloadPath: String, onDownloadPathChange: (String) -> Unit) {
+fun SettingsMenu(onDismiss: () -> Unit, onHistory: () -> Unit, onDownloads: () -> Unit, onBookmarks: () -> Unit, onOpenSettings: () -> Unit) {
     Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(0.4f)).clickable { onDismiss() }) {
         Surface(modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth(), shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp), color = MaterialTheme.colorScheme.surface) {
-            Column(modifier = Modifier.padding(24.dp).navigationBarsPadding().verticalScroll(rememberScrollState())) {
+            Column(modifier = Modifier.padding(24.dp).navigationBarsPadding()) {
                 Text(text = "Ember Menu", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(bottom = 16.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
                     MenuActionItem(Icons.Outlined.History, "History") { onHistory() }
                     MenuActionItem(Icons.Outlined.Download, "Downloads") { onDownloads() }
                     MenuActionItem(Icons.Outlined.StarOutline, "Bookmarks") { onBookmarks() }
-                    MenuActionItem(Icons.Outlined.RecordVoiceOver, "Read Page") { onReadPage(); onDismiss() }
+                    MenuActionItem(Icons.Outlined.Settings, "Settings") { onOpenSettings() }
                 }
                 HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
-                
-                Text("Downloads", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
-                var pathInput by remember { mutableStateOf(downloadPath) }
-                OutlinedTextField(
-                    value = pathInput,
-                    onValueChange = { pathInput = it; onDownloadPathChange(it) },
-                    label = { Text("Download Path") },
-                    modifier = Modifier.fillMaxWidth(),
-                    textStyle = sp12
-                )
-                
-                Spacer(Modifier.height(16.dp))
-                ListItem(
-                    headlineContent = { Text("Clear Browsing Data") }, 
-                    leadingContent = { Icon(Icons.Default.DeleteOutline, null) }, 
-                    modifier = Modifier.clickable { onClearData(); onDismiss() },
-                    supportingContent = { Text("Cookies, cache and site data") }
-                )
-                ListItem(
-                    headlineContent = { Text("Reset Home") },
-                    leadingContent = { Icon(Icons.Outlined.Refresh, null) },
-                    modifier = Modifier.clickable { onResetHomepage(); onDismiss() }
-                )
                 ListItem(headlineContent = { Text("Exit") }, leadingContent = { Icon(Icons.AutoMirrored.Filled.ExitToApp, null) }, modifier = Modifier.clickable { /* Exit */ })
             }
         }
     }
 }
-
-val sp12 = androidx.compose.ui.text.TextStyle(fontSize = 12.sp)
 
 @Composable
 fun MenuActionItem(icon: ImageVector, label: String, onClick: () -> Unit) {
@@ -934,6 +1127,15 @@ fun BookmarkDialog(items: List<BookmarkItem>, onUrlClick: (String) -> Unit, onDi
                             headlineContent = { Text(item.title) }, 
                             supportingContent = { Text(item.url) }, 
                             modifier = Modifier.clickable { onUrlClick(item.url) },
+                            leadingContent = {
+                                Box(Modifier.size(32.dp).clip(RoundedCornerShape(4.dp)).background(MaterialTheme.colorScheme.surfaceVariant), contentAlignment = Alignment.Center) {
+                                    if (item.favicon != null) {
+                                        Image(bitmap = item.favicon.toBitmap()!!.asImageBitmap(), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+                                    } else {
+                                        Icon(Icons.Default.Public, null, tint = Color.Gray, modifier = Modifier.size(16.dp))
+                                    }
+                                }
+                            },
                             trailingContent = { IconButton(onClick = { onDeleteBookmark(item.id) }) { Icon(Icons.Default.Delete, null, tint = Color.Gray) } }
                         ) 
                     } 
@@ -956,7 +1158,26 @@ fun HistoryDialog(items: List<HistoryItem>, onUrlClick: (String) -> Unit, onDism
         },
         text = { 
             if (items.isEmpty()) { Text("No history yet", modifier = Modifier.fillMaxWidth().padding(16.dp), textAlign = TextAlign.Center) }
-            else { LazyColumn(Modifier.height(400.dp)) { items(items) { item -> ListItem(headlineContent = { Text(item.title, maxLines = 1) }, supportingContent = { Text(item.url, maxLines = 1) }, modifier = Modifier.clickable { onUrlClick(item.url) }) } } }
+            else { 
+                LazyColumn(Modifier.height(400.dp)) { 
+                    items(items) { item -> 
+                        ListItem(
+                            headlineContent = { Text(item.title, maxLines = 1) }, 
+                            supportingContent = { Text(item.url, maxLines = 1) }, 
+                            modifier = Modifier.clickable { onUrlClick(item.url) },
+                            leadingContent = {
+                                Box(Modifier.size(32.dp).clip(RoundedCornerShape(4.dp)).background(MaterialTheme.colorScheme.surfaceVariant), contentAlignment = Alignment.Center) {
+                                    if (item.favicon != null) {
+                                        Image(bitmap = item.favicon.toBitmap()!!.asImageBitmap(), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+                                    } else {
+                                        Icon(Icons.Default.Public, null, tint = Color.Gray, modifier = Modifier.size(16.dp))
+                                    }
+                                }
+                            }
+                        ) 
+                    } 
+                } 
+            }
         },
         confirmButton = { TextButton(onClick = { onDismiss() }) { Text("Close") } }
     )
@@ -1003,7 +1224,7 @@ fun startDownload(context: Context, url: String, fileName: String, path: String,
             .setDestinationUri(Uri.fromFile(java.io.File(path, fileName)))
         
         val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-        dm.enqueue(request)
+        dm?.enqueue(request)
         
         (context as? MainActivity)?.lifecycleScope?.launch {
             database.browserDao().insertDownload(DownloadItem(url = url, fileName = fileName, filePath = path, totalSize = 0))
@@ -1019,7 +1240,6 @@ fun HomeScreen(onSearch: (String) -> Unit, onConfigureHomepage: (String) -> Unit
     var suggestions by remember { mutableStateOf(listOf<String>()) }
     var showConfigDialog by remember { mutableStateOf(false) }
     val client = remember { OkHttpClient() }
-    val language = Locale.getDefault().language
 
     LaunchedEffect(query) {
         if (query.length > 1) {
@@ -1055,6 +1275,7 @@ fun HomeScreen(onSearch: (String) -> Unit, onConfigureHomepage: (String) -> Unit
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
+        @OptIn(ExperimentalMaterial3Api::class)
         Text(text = "Ember", fontSize = 48.sp, fontWeight = FontWeight.Light, color = MaterialTheme.colorScheme.primary)
         Spacer(Modifier.height(40.dp))
         Box(contentAlignment = Alignment.TopCenter) {

@@ -37,7 +37,6 @@ android {
     }
 }
 
-// Fixed: Using modern compilerOptions and correct library accessors (dots instead of dashes)
 kotlin {
     compilerOptions {
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_11)
@@ -56,13 +55,14 @@ dependencies {
     implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.material.icons.extended)
     implementation(libs.material)
+    implementation("androidx.media:media:1.7.0")
 
     // Room
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
 
-    // Networking for Suggestions
+    // Networking
     implementation(libs.retrofit)
     implementation(libs.retrofit.scalars)
     implementation(libs.okhttp)

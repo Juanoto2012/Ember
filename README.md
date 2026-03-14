@@ -6,7 +6,7 @@ Ember is a modern, fast, and secure Android web browser designed with a focus on
 
 - **🎨 Modern UI**: Material 3 design with a custom color palette based on `#8f4c38`.
 - **🛡️ Security & Privacy Pro**: 
-    - ** Forced HTTPS**: Automatically blocks non-HTTPS websites to keep your data safe.
+    - **Forced HTTPS**: Automatically blocks non-HTTPS websites to keep your data safe.
     - **SSL Certificate Blocking**: Prevents access to sites with invalid or expired certificates with a clear security warning.
     - **Granular Permissions**: System-style dialogs to allow or deny site access to Camera, Microphone, and Location.
     - **Real-time Shield**: Quick-access security status in the address bar.
@@ -25,9 +25,14 @@ Ember is a modern, fast, and secure Android web browser designed with a focus on
 - **📂 Enhanced Downloads**:
     - **Custom Download Path**: Configure exactly where your files are saved.
     - Integrated Download Manager to track progress and history.
+- **🖼️ Contextual Actions**:
+    - **Image Context Menu**: Long-press any image to open in new tab, download, or copy URL.
+- **🎵 Multimedia Pro**:
+    - **Chrome-style Media Playback**: Full support for inline video and background audio.
 - **🔖 Visual Data Management**:
     - **Favicon Support**: See site icons in your Tabs, History, and Bookmarks.
     - Comprehensive data cleaning tools (Cookies, Cache, Forms).
+- **🏠 Custom Home**: Improved start page with quick links and smart search.
 - **🛠️ Robust Error Handling**: Custom "x _ x" error screen with technical details and easy retry.
 
 ## 🛠️ Technologies Used

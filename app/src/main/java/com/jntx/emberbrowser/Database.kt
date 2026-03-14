@@ -2,11 +2,12 @@ package com.jntx.emberbrowser
 
 import android.content.Context
 import androidx.room.*
+import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface BrowserDao {
     @Query("SELECT * FROM history ORDER BY timestamp DESC")
-    suspend fun getAllHistory(): List<HistoryItem>
+    fun getAllHistory(): Flow<List<HistoryItem>>
 
     @Insert
     suspend fun insertHistory(item: HistoryItem)
@@ -15,7 +16,7 @@ interface BrowserDao {
     suspend fun clearHistory()
 
     @Query("SELECT * FROM bookmarks")
-    suspend fun getAllBookmarks(): List<BookmarkItem>
+    fun getAllBookmarks(): Flow<List<BookmarkItem>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertBookmark(item: BookmarkItem)
@@ -24,7 +25,7 @@ interface BrowserDao {
     suspend fun deleteBookmark(id: Long)
 
     @Query("SELECT * FROM downloads ORDER BY timestamp DESC")
-    suspend fun getAllDownloads(): List<DownloadItem>
+    fun getAllDownloads(): Flow<List<DownloadItem>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertDownload(item: DownloadItem)
@@ -33,7 +34,7 @@ interface BrowserDao {
     suspend fun updateDownload(item: DownloadItem)
 }
 
-@Database(entities = [HistoryItem::class, BookmarkItem::class, DownloadItem::class], version = 2)
+@Database(entities = [HistoryItem::class, BookmarkItem::class, DownloadItem::class], version = 3)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun browserDao(): BrowserDao
 
@@ -48,7 +49,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "ember_database"
                 )
-                .fallbackToDestructiveMigration() // Simple for now
+                .fallbackToDestructiveMigration()
                 .build()
                 INSTANCE = instance
                 instance
