@@ -1,5 +1,6 @@
 package com.jntx.emberbrowser
 
+import android.graphics.Bitmap
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 
@@ -8,7 +9,8 @@ data class HistoryItem(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val url: String,
     val title: String,
-    val timestamp: Long = System.currentTimeMillis()
+    val timestamp: Long = System.currentTimeMillis(),
+    val favicon: ByteArray? = null
 )
 
 @Entity(tableName = "bookmarks")
@@ -16,7 +18,8 @@ data class BookmarkItem(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val url: String,
     val title: String,
-    val isFavorite: Boolean = false
+    val isFavorite: Boolean = false,
+    val favicon: ByteArray? = null
 )
 
 @Entity(tableName = "downloads")
@@ -34,5 +37,6 @@ data class DownloadItem(
 data class TabItem(
     val id: String = java.util.UUID.randomUUID().toString(),
     var url: String = "home",
-    var title: String = "New Tab"
+    var title: String = "New Tab",
+    var favicon: Bitmap? = null
 )
