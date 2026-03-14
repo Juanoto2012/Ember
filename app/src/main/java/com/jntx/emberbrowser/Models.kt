@@ -40,3 +40,10 @@ data class TabItem(
     var title: String = "New Tab",
     var favicon: Bitmap? = null
 )
+
+data class MediaInfo(
+    val title: String = "Ember Browser",
+    val artist: String = "Unknown Artist",
+    val artwork: Bitmap? = null,
+    val isPlaying: Boolean = false
+)
