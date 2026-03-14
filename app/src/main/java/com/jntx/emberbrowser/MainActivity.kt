@@ -60,8 +60,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -89,9 +91,17 @@ import java.util.*
 class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     private var tts: TextToSpeech? = null
     private var mediaSession: MediaSessionCompat? = null
+    private var currentWebView: WebView? = null
+    private var isPlayingMedia = false
+    private var currentMediaTitle = "Ember Browser"
+    private var currentMediaArtist = "Unknown Artist"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
+        // Habilitar cookies globales para persistencia como Chrome
+        CookieManager.getInstance().setAcceptCookie(true)
+        
         tts = TextToSpeech(this, this)
         setupMediaSession()
         createNotificationChannel()
@@ -99,7 +109,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         val database = AppDatabase.getDatabase(this)
         setContent {
             EmberTheme {
-                BrowserApp(database, ::speak, ::updateMediaStatus)
+                BrowserApp(database, ::speak, ::updateMediaStatus, onWebViewCreated = { currentWebView = it })
             }
         }
     }
@@ -107,24 +117,73 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     private fun setupMediaSession() {
         mediaSession = MediaSessionCompat(this, "EmberMediaSession").apply {
             setFlags(MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS or MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS)
+            setCallback(object : MediaSessionCompat.Callback() {
+                override fun onPlay() { togglePlayback() }
+                override fun onPause() { togglePlayback() }
+                override fun onSkipToNext() { skipNext() }
+                override fun onSkipToPrevious() { skipPrevious() }
+            })
             isActive = true
         }
     }
 
-    private fun updateMediaStatus(title: String, url: String, isPlaying: Boolean) {
+    private fun updateMediaStatus(title: String, artist: String?, isPlaying: Boolean) {
         val session = mediaSession ?: return
+        isPlayingMedia = isPlaying
+        currentMediaTitle = title
+        currentMediaArtist = artist ?: "Ember Browser"
+        
         val state = if (isPlaying) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED
+        
         session.setPlaybackState(PlaybackStateCompat.Builder()
             .setState(state, PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN, 1.0f)
-            .setActions(PlaybackStateCompat.ACTION_PLAY_PAUSE or PlaybackStateCompat.ACTION_STOP)
+            .setActions(
+                PlaybackStateCompat.ACTION_PLAY_PAUSE or 
+                PlaybackStateCompat.ACTION_PAUSE or 
+                PlaybackStateCompat.ACTION_PLAY or 
+                PlaybackStateCompat.ACTION_STOP or 
+                PlaybackStateCompat.ACTION_SKIP_TO_NEXT or 
+                PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS
+            )
             .build())
         
         session.setMetadata(MediaMetadataCompat.Builder()
-            .putString(MediaMetadataCompat.METADATA_KEY_TITLE, title)
-            .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, "Ember Browser")
+            .putString(MediaMetadataCompat.METADATA_KEY_TITLE, currentMediaTitle)
+            .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, currentMediaArtist)
             .build())
 
-        showMediaNotification(title, isPlaying)
+        showMediaNotification(currentMediaTitle, currentMediaArtist, isPlaying)
+    }
+
+    private fun togglePlayback() {
+        lifecycleScope.launch(Dispatchers.Main) {
+            currentWebView?.evaluateJavascript("""
+                (function() {
+                    var media = document.querySelector('video') || document.querySelector('audio');
+                    if (media) {
+                        if (media.paused) media.play();
+                        else media.pause();
+                    }
+                })();
+            """.trimIndent(), null)
+        }
+    }
+
+    private fun skipNext() {
+        lifecycleScope.launch(Dispatchers.Main) {
+            currentWebView?.evaluateJavascript("""
+                (function() {
+                    var nextBtn = document.querySelector('.ytp-next-button') || document.querySelector('[aria-label="Siguiente"]') || document.querySelector('[aria-label="Next"]');
+                    if (nextBtn) nextBtn.click();
+                })();
+            """.trimIndent(), null)
+        }
+    }
+
+    private fun skipPrevious() {
+        lifecycleScope.launch(Dispatchers.Main) {
+            currentWebView?.evaluateJavascript("window.history.back();", null)
+        }
     }
 
     private fun createNotificationChannel() {
@@ -135,23 +194,30 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         }
     }
 
-    private fun showMediaNotification(title: String, isPlaying: Boolean) {
+    private fun showMediaNotification(title: String, artist: String, isPlaying: Boolean) {
         val session = mediaSession ?: return
         val manager = getSystemService(NotificationManager::class.java) as NotificationManager
         
-        if (!isPlaying) {
+        // No mostrar si no hay contenido real
+        if (!isPlaying && title == "Ember Browser") {
             manager.cancel(1)
             return
         }
 
+        val playPauseIcon = if (isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play
+        
         val notification = NotificationCompat.Builder(this, "ember_media")
             .setSmallIcon(android.R.drawable.ic_media_play)
             .setContentTitle(title)
-            .setContentText("Playing in Ember")
-            .setOngoing(true)
+            .setContentText(artist)
+            .setOngoing(isPlaying)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setStyle(androidx.media.app.NotificationCompat.MediaStyle()
                 .setMediaSession(session.sessionToken)
-                .setShowActionsInCompactView(0))
+                .setShowActionsInCompactView(0, 1, 2))
+            .addAction(NotificationCompat.Action(android.R.drawable.ic_media_previous, "Anterior", null))
+            .addAction(NotificationCompat.Action(playPauseIcon, if (isPlaying) "Pausar" else "Reproducir", null))
+            .addAction(NotificationCompat.Action(android.R.drawable.ic_media_next, "Siguiente", null))
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
         manager.notify(1, notification)
@@ -164,7 +230,15 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     }
 
     private fun speak(text: String) {
-        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, null)
+        if (text.startsWith("__MEDIA_PLAY__")) {
+            val data = text.removePrefix("__MEDIA_PLAY__").split("|")
+            updateMediaStatus(data.getOrElse(0) { "Ember" }, data.getOrNull(1), true)
+        } else if (text.startsWith("__MEDIA_PAUSE__")) {
+            val data = text.removePrefix("__MEDIA_PAUSE__").split("|")
+            updateMediaStatus(data.getOrElse(0) { "Ember" }, data.getOrNull(1), false)
+        } else {
+            tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, null)
+        }
     }
 
     override fun onDestroy() {
@@ -196,7 +270,12 @@ val sp12 = androidx.compose.ui.text.TextStyle(fontSize = 12.sp)
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-fun BrowserApp(database: AppDatabase, onSpeak: (String) -> Unit, onMediaStatus: (String, String, Boolean) -> Unit) {
+fun BrowserApp(
+    database: AppDatabase, 
+    onSpeak: (String) -> Unit, 
+    onMediaStatus: (String, String?, Boolean) -> Unit,
+    onWebViewCreated: (WebView) -> Unit
+) {
     var tabs by remember { mutableStateOf(listOf(TabItem())) }
     var selectedTabIndex by remember { mutableIntStateOf(0) }
     var showTabManager by remember { mutableStateOf(false) }
@@ -209,6 +288,7 @@ fun BrowserApp(database: AppDatabase, onSpeak: (String) -> Unit, onMediaStatus: 
     
     val context = LocalContext.current
     val sharedPrefs = remember { context.getSharedPreferences("ember_prefs", Context.MODE_PRIVATE) }
+    val clipboardManager = LocalClipboardManager.current
     
     var customHomepageUrl by remember { mutableStateOf(sharedPrefs.getString("homepage_url", "") ?: "") }
     var downloadPath by remember { mutableStateOf(sharedPrefs.getString("download_path", Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).absolutePath) ?: "") }
@@ -219,7 +299,7 @@ fun BrowserApp(database: AppDatabase, onSpeak: (String) -> Unit, onMediaStatus: 
     var downloadUrl by remember { mutableStateOf("") }
     var showDownloadDialog by remember { mutableStateOf(false) }
     var permissionRequest by remember { mutableStateOf<Pair<PermissionRequest, String>?>(null) }
-    var imageContextMenu by remember { mutableStateOf<String?>(null) }
+    var contextMenuInfo by remember { mutableStateOf<Pair<String, String>?>(null) } // Label to URL
     
     val currentTab = tabs.getOrNull(selectedTabIndex) ?: TabItem()
     val scope = rememberCoroutineScope()
@@ -279,7 +359,7 @@ fun BrowserApp(database: AppDatabase, onSpeak: (String) -> Unit, onMediaStatus: 
         showAddressSuggestions = false
     }
 
-    BackHandler(enabled = !showTabManager && !showHistory && !showBookmarks && !showDownloads && !showSettings && !showSecurityInfo && !showSettingsScreen && permissionRequest == null && imageContextMenu == null) {
+    BackHandler(enabled = !showTabManager && !showHistory && !showBookmarks && !showDownloads && !showSettings && !showSecurityInfo && !showSettingsScreen && permissionRequest == null && contextMenuInfo == null) {
         if (webView?.canGoBack() == true) {
             webView?.goBack()
         } else if (currentTab.url != "home") {
@@ -502,7 +582,10 @@ fun BrowserApp(database: AppDatabase, onSpeak: (String) -> Unit, onMediaStatus: 
                         downloadUrl = url
                         showDownloadDialog = true
                     },
-                    onWebViewCreated = { webView = it },
+                    onWebViewCreated = { 
+                        webView = it
+                        onWebViewCreated(it)
+                    },
                     onSpeak = onSpeak,
                     onProgressChanged = { loadingProgress = it },
                     isRefreshing = isRefreshing,
@@ -520,7 +603,7 @@ fun BrowserApp(database: AppDatabase, onSpeak: (String) -> Unit, onMediaStatus: 
                         permissionRequest = request to url
                     },
                     onImageLongClick = { url ->
-                        imageContextMenu = url
+                        contextMenuInfo = "Imagen" to url
                     },
                     enhancedProtection = enhancedProtection,
                     onMediaStatus = onMediaStatus,
@@ -610,7 +693,7 @@ fun BrowserApp(database: AppDatabase, onSpeak: (String) -> Unit, onMediaStatus: 
                     certificate = webView?.certificate,
                     onDismiss = { showSecurityInfo = false },
                     onClearSiteData = {
-                        WebStorage.getInstance().deleteOrigin(Uri.parse(currentTab.url).host)
+                        WebStorage.getInstance().deleteOrigin(Uri.parse(currentTab.url).host ?: "")
                         webView?.clearCache(true)
                         showSecurityInfo = false
                         Toast.makeText(context, "Datos del sitio borrados", Toast.LENGTH_SHORT).show()
@@ -630,21 +713,36 @@ fun BrowserApp(database: AppDatabase, onSpeak: (String) -> Unit, onMediaStatus: 
                 )
             }
 
-            imageContextMenu?.let { url ->
-                AlertDialog(
-                    onDismissRequest = { imageContextMenu = null },
-                    title = { Text("Opciones de imagen") },
-                    text = { Text(url) },
-                    confirmButton = {
-                        TextButton(onClick = { 
+            contextMenuInfo?.let { (label, url) ->
+                CromiteContextMenu(
+                    title = label,
+                    url = url,
+                    onDismiss = { contextMenuInfo = null },
+                    actions = listOf(
+                        ContextAction("Abrir en pestaña nueva", Icons.Default.Tab) {
+                            tabs = tabs + TabItem(url = url)
+                            selectedTabIndex = tabs.size - 1
+                            contextMenuInfo = null
+                        },
+                        ContextAction("Copiar enlace", Icons.Default.ContentCopy) {
+                            clipboardManager.setText(AnnotatedString(url))
+                            Toast.makeText(context, "Enlace copiado", Toast.LENGTH_SHORT).show()
+                            contextMenuInfo = null
+                        },
+                        ContextAction("Descargar", Icons.Default.Download) {
                             downloadUrl = url
                             showDownloadDialog = true
-                            imageContextMenu = null
-                        }) { Text("Descargar imagen") }
-                    },
-                    dismissButton = {
-                        TextButton(onClick = { imageContextMenu = null }) { Text("Cancelar") }
-                    }
+                            contextMenuInfo = null
+                        },
+                        ContextAction("Compartir", Icons.Default.Share) {
+                            val intent = Intent(Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(Intent.EXTRA_TEXT, url)
+                            }
+                            context.startActivity(Intent.createChooser(intent, "Compartir enlace"))
+                            contextMenuInfo = null
+                        }
+                    )
                 )
             }
 
@@ -701,6 +799,40 @@ fun BrowserApp(database: AppDatabase, onSpeak: (String) -> Unit, onMediaStatus: 
                         isAdBlockerEnabled = it
                         sharedPrefs.edit().putBoolean("ad_blocker_enabled", it).apply()
                     }
+                )
+            }
+        }
+    }
+}
+
+data class ContextAction(val label: String, val icon: ImageVector, val onClick: () -> Unit)
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun CromiteContextMenu(title: String, url: String, onDismiss: () -> Unit, actions: List<ContextAction>) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        dragHandle = { BottomSheetDefaults.DragHandle() },
+        containerColor = MaterialTheme.colorScheme.surfaceColorAtElevation(2.dp)
+    ) {
+        Column(Modifier.padding(bottom = 32.dp).navigationBarsPadding()) {
+            Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(40.dp).background(MaterialTheme.colorScheme.primaryContainer, CircleShape), contentAlignment = Alignment.Center) {
+                    Icon(if (title == "Imagen") Icons.Default.Image else Icons.Default.Link, null, tint = MaterialTheme.colorScheme.onPrimaryContainer)
+                }
+                Spacer(Modifier.width(16.dp))
+                Column {
+                    Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Text(url, style = MaterialTheme.typography.bodySmall, color = Color.Gray, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+            HorizontalDivider(Modifier.padding(horizontal = 16.dp))
+            Spacer(Modifier.height(8.dp))
+            actions.forEach { action ->
+                ListItem(
+                    headlineContent = { Text(action.label) },
+                    leadingContent = { Icon(action.icon, null, tint = MaterialTheme.colorScheme.primary) },
+                    modifier = Modifier.clickable { action.onClick() }
                 )
             }
         }
@@ -836,7 +968,7 @@ fun BrowserWebViewContainer(
     onPermissionRequested: (PermissionRequest, String) -> Unit,
     onImageLongClick: (String) -> Unit,
     enhancedProtection: Boolean,
-    onMediaStatus: (String, String, Boolean) -> Unit,
+    onMediaStatus: (String, String?, Boolean) -> Unit,
     isAdBlockerEnabled: Boolean
 ) {
     val pullToRefreshState = rememberPullToRefreshState()
@@ -877,7 +1009,7 @@ fun BrowserWebView(
     onPermissionRequested: (PermissionRequest, String) -> Unit,
     onImageLongClick: (String) -> Unit,
     enhancedProtection: Boolean,
-    onMediaStatus: (String, String, Boolean) -> Unit,
+    onMediaStatus: (String, String?, Boolean) -> Unit,
     isAdBlockerEnabled: Boolean
 ) {
     var errorInfo by remember { mutableStateOf<String?>(null) }
@@ -910,6 +1042,9 @@ fun BrowserWebView(
                     userAgentString = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
                 }
                 
+                // Configurar cookies para esta instancia
+                CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+                
                 addJavascriptInterface(TtsInterface(onSpeak), "EmberTTS")
                 
                 setOnLongClickListener {
@@ -941,25 +1076,45 @@ fun BrowserWebView(
 
                     override fun onPageFinished(view: WebView?, url: String?) {
                         super.onPageFinished(view, url)
+                        // Guardar cookies en disco al terminar
+                        CookieManager.getInstance().flush()
+                        
                         if (errorInfo == null && !isBlockedBySecurity) {
                             url?.let { onPageFinished(it, view?.title) }
-                            onMediaStatus(view?.title ?: "Ember Browser", url ?: "", true)
+                            
+                            // Inject script to detect media and metadata
                             view?.evaluateJavascript("""
                                 (function() {
+                                    var media = document.querySelector('video') || document.querySelector('audio');
+                                    if (media) {
+                                        var updateMedia = function() {
+                                            var title = document.title;
+                                            var artist = "Ember Browser";
+                                            
+                                            if (navigator.mediaSession && navigator.mediaSession.metadata) {
+                                                if (navigator.mediaSession.metadata.title) title = navigator.mediaSession.metadata.title;
+                                                if (navigator.mediaSession.metadata.artist) artist = navigator.mediaSession.metadata.artist;
+                                            }
+                                            
+                                            if (!media.paused) {
+                                                EmberTTS.speak("__MEDIA_PLAY__" + title + "|" + artist);
+                                            } else {
+                                                EmberTTS.speak("__MEDIA_PAUSE__" + title + "|" + artist);
+                                            }
+                                        };
+                                        
+                                        media.onplay = updateMedia;
+                                        media.onpause = updateMedia;
+                                        // Trigger check on load
+                                        setTimeout(updateMedia, 1500);
+                                    }
+                                    
                                     if (!window.speechSynthesis) {
                                         window.speechSynthesis = {
                                             speak: function(utterance) { if (utterance && utterance.text) EmberTTS.speak(utterance.text); },
                                             cancel: function() {}, pause: function() {}, resume: function() {}, getVoices: function() { return []; }
                                         };
                                         window.SpeechSynthesisUtterance = function(text) { this.text = text; };
-                                    } else {
-                                        var oldSpeak = window.speechSynthesis.speak;
-                                        window.speechSynthesis.speak = function(utterance) {
-                                            if (utterance && utterance.text) {
-                                                EmberTTS.speak(utterance.text);
-                                            }
-                                            oldSpeak.call(window.speechSynthesis, utterance);
-                                        };
                                     }
                                 })();
                             """.trimIndent(), null)
@@ -1142,7 +1297,7 @@ fun BookmarkDialog(items: List<BookmarkItem>, onUrlClick: (String) -> Unit, onDi
                 }
             }
         },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } }
+        confirmButton = { TextButton(onClick = { onDismiss() }) { Text("Close") } }
     )
 }
 
@@ -1189,10 +1344,28 @@ fun DownloadConfirmDialog(url: String, defaultPath: String, onConfirm: (String, 
     var path by remember { mutableStateOf(defaultPath) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Download File") },
-        text = { Column { OutlinedTextField(value = fileName, onValueChange = { fileName = it }, label = { Text("File Name") }); Spacer(Modifier.height(8.dp)); OutlinedTextField(value = path, onValueChange = { path = it }, label = { Text("Download Path") }) } },
-        confirmButton = { Button(onClick = { onConfirm(fileName, path) }) { Text("Download") } },
-        dismissButton = { TextButton(onClick = { onDismiss() }) { Text("Cancel") } }
+        title = { Text("Descargar archivo") },
+        text = { 
+            Column {
+                Text(url, style = MaterialTheme.typography.bodySmall, color = Color.Gray, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Spacer(Modifier.height(16.dp))
+                OutlinedTextField(
+                    value = fileName, 
+                    onValueChange = { fileName = it }, 
+                    label = { Text("Nombre del archivo") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = path, 
+                    onValueChange = { path = it }, 
+                    label = { Text("Ruta de descarga") },
+                    modifier = Modifier.fillMaxWidth()
+                ) 
+            } 
+        },
+        confirmButton = { Button(onClick = { onConfirm(fileName, path) }) { Text("Descargar") } },
+        dismissButton = { TextButton(onClick = { onDismiss() }) { Text("Cancelar") } }
     )
 }
 
@@ -1224,7 +1397,7 @@ fun startDownload(context: Context, url: String, fileName: String, path: String,
             .setDestinationUri(Uri.fromFile(java.io.File(path, fileName)))
         
         val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-        dm?.enqueue(request)
+        dm.enqueue(request)
         
         (context as? MainActivity)?.lifecycleScope?.launch {
             database.browserDao().insertDownload(DownloadItem(url = url, fileName = fileName, filePath = path, totalSize = 0))
@@ -1289,6 +1462,7 @@ fun HomeScreen(onSearch: (String) -> Unit, onConfigureHomepage: (String) -> Unit
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                     keyboardActions = KeyboardActions(onSearch = { onSearch(query) }),
+                    leadingIcon = { Icon(Icons.Default.Search, null, tint = MaterialTheme.colorScheme.primary) },
                     colors = TextFieldDefaults.colors(
                         focusedContainerColor = MaterialTheme.colorScheme.surface,
                         unfocusedContainerColor = MaterialTheme.colorScheme.surface,
