@@ -35,12 +35,16 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     private var currentArtwork: Bitmap? = null
     private var lastTitle = ""
     private var lastArtist = ""
+    private var lastIsPlaying = false
+    private var currentPosition = 0L
+    private var currentDuration = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // Habilitar cookies globales (sin requerir WebView aquí)
+        // Habilitar cookies globales
         CookieManager.getInstance().setAcceptCookie(true)
+        // Eliminado setAcceptThirdPartyCookies(null, true) que causaba el crash
         
         tts = TextToSpeech(this, this)
         setupMediaSession()
@@ -69,40 +73,51 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                 override fun onPause() { togglePlayback() }
                 override fun onSkipToNext() { skipNext() }
                 override fun onSkipToPrevious() { skipPrevious() }
+                override fun onSeekTo(pos: Long) { seekTo(pos) }
             })
             isActive = true
         }
     }
 
     private fun updateMediaStatus(title: String, artist: String?, isPlaying: Boolean) {
-        val session = mediaSession ?: return
         lastTitle = title
         lastArtist = artist ?: "Ember Browser"
-        
-        val state = if (isPlaying) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED
+        lastIsPlaying = isPlaying
+        updatePlaybackState()
+        updateMetadata()
+        showMediaNotification(lastTitle, lastArtist, lastIsPlaying, currentArtwork)
+    }
+
+    private fun updatePlaybackState() {
+        val session = mediaSession ?: return
+        val state = if (lastIsPlaying) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED
         
         session.setPlaybackState(PlaybackStateCompat.Builder()
-            .setState(state, PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN, 1.0f)
+            .setState(state, currentPosition, if (lastIsPlaying) 1.0f else 0.0f)
             .setActions(
                 PlaybackStateCompat.ACTION_PLAY_PAUSE or 
                 PlaybackStateCompat.ACTION_PAUSE or 
                 PlaybackStateCompat.ACTION_PLAY or 
                 PlaybackStateCompat.ACTION_SKIP_TO_NEXT or 
                 PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS or
+                PlaybackStateCompat.ACTION_SEEK_TO or
                 PlaybackStateCompat.ACTION_STOP
             )
             .build())
-        
+    }
+
+    private fun updateMetadata() {
+        val session = mediaSession ?: return
         val metadataBuilder = MediaMetadataCompat.Builder()
             .putString(MediaMetadataCompat.METADATA_KEY_TITLE, lastTitle)
             .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, lastArtist)
+            .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, currentDuration)
         
         currentArtwork?.let {
             metadataBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, it)
         }
         
         session.setMetadata(metadataBuilder.build())
-        showMediaNotification(lastTitle, lastArtist, isPlaying, currentArtwork)
     }
 
     private fun togglePlayback() {
@@ -125,6 +140,10 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                 (function() {
                     var nextBtn = document.querySelector('.ytp-next-button') || document.querySelector('[aria-label="Siguiente"]') || document.querySelector('[aria-label="Next"]');
                     if (nextBtn) nextBtn.click();
+                    else {
+                        var media = document.querySelector('video') || document.querySelector('audio');
+                        if (media) media.currentTime = media.duration;
+                    }
                 })();
             """.trimIndent(), null)
         }
@@ -132,7 +151,24 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
 
     private fun skipPrevious() {
         lifecycleScope.launch(Dispatchers.Main) {
-            currentWebView?.evaluateJavascript("window.history.back();", null)
+            currentWebView?.evaluateJavascript("""
+                (function() {
+                    var prevBtn = document.querySelector('.ytp-prev-button') || document.querySelector('[aria-label="Anterior"]') || document.querySelector('[aria-label="Previous"]');
+                    if (prevBtn) prevBtn.click();
+                    else window.history.back();
+                })();
+            """.trimIndent(), null)
+        }
+    }
+
+    private fun seekTo(pos: Long) {
+        lifecycleScope.launch(Dispatchers.Main) {
+            currentWebView?.evaluateJavascript("""
+                (function() {
+                    var media = document.querySelector('video') || document.querySelector('audio');
+                    if (media) media.currentTime = ${pos / 1000.0};
+                })();
+            """.trimIndent(), null)
         }
     }
 
@@ -148,7 +184,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         val session = mediaSession ?: return
         val manager = getSystemService(NotificationManager::class.java) as NotificationManager
         
-        if (!isPlaying && title == "Ember Browser") {
+        if (!isPlaying && title == "Ember Browser" && currentPosition == 0L) {
             manager.cancel(1)
             return
         }
@@ -180,17 +216,26 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     }
 
     private fun speak(text: String) {
-        if (text.startsWith("__MEDIA_PLAY__")) {
-            val data = text.removePrefix("__MEDIA_PLAY__").split("|")
-            updateMediaStatus(data.getOrElse(0) { "Ember" }, data.getOrNull(1), true)
-        } else if (text.startsWith("__MEDIA_PAUSE__")) {
-            val data = text.removePrefix("__MEDIA_PAUSE__").split("|")
-            updateMediaStatus(data.getOrElse(0) { "Ember" }, data.getOrNull(1), false)
-        } else if (text.startsWith("__MEDIA_ARTWORK__")) {
-            val url = text.removePrefix("__MEDIA_ARTWORK__")
-            fetchArtwork(url)
-        } else {
-            tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, null)
+        when {
+            text.startsWith("__MEDIA_PLAY__") -> {
+                val data = text.removePrefix("__MEDIA_PLAY__").split("|")
+                updateMediaStatus(data.getOrElse(0) { "Ember" }, data.getOrNull(1), true)
+            }
+            text.startsWith("__MEDIA_PAUSE__") -> {
+                val data = text.removePrefix("__MEDIA_PAUSE__").split("|")
+                updateMediaStatus(data.getOrElse(0) { "Ember" }, data.getOrNull(1), false)
+            }
+            text.startsWith("__MEDIA_ARTWORK__") -> {
+                fetchArtwork(text.removePrefix("__MEDIA_ARTWORK__"))
+            }
+            text.startsWith("__MEDIA_PROGRESS__") -> {
+                val data = text.removePrefix("__MEDIA_PROGRESS__").split("|")
+                currentPosition = data.getOrNull(0)?.toDoubleOrNull()?.toLong() ?: currentPosition
+                currentDuration = data.getOrNull(1)?.toDoubleOrNull()?.toLong() ?: currentDuration
+                updatePlaybackState()
+                updateMetadata()
+            }
+            else -> tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, null)
         }
     }
 
@@ -200,9 +245,8 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                 val bitmap = BitmapFactory.decodeStream(URL(url).openStream())
                 currentArtwork = bitmap
                 withContext(Dispatchers.Main) {
-                    val state = mediaSession?.controller?.playbackState?.state
-                    val isPlaying = state == PlaybackStateCompat.STATE_PLAYING
-                    updateMediaStatus(lastTitle, lastArtist, isPlaying)
+                    updateMetadata()
+                    showMediaNotification(lastTitle, lastArtist, lastIsPlaying, currentArtwork)
                 }
             } catch (e: Exception) { e.printStackTrace() }
         }

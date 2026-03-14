@@ -140,10 +140,17 @@ fun BrowserWebView(
                                             }
                                         };
                                         
+                                        var sendProgress = function() {
+                                            if (media && !media.paused) {
+                                                EmberTTS.speak("__MEDIA_PROGRESS__" + (media.currentTime * 1000) + "|" + (media.duration * 1000));
+                                            }
+                                        };
+                                        
                                         media.onplay = updateMedia;
                                         media.onpause = updateMedia;
                                         setTimeout(updateMedia, 2000);
-                                        setInterval(function() { if (!media.paused) updateMedia(); }, 5000);
+                                        setInterval(sendProgress, 1000);
+                                        setInterval(function() { if (!media.paused) updateMedia(); }, 10000);
                                     }
                                 })();
                             """.trimIndent(), null)
@@ -170,14 +177,4 @@ fun BrowserWebView(
         },
         modifier = Modifier.fillMaxSize()
     )
-}
-
-@Composable
-fun SecurityBlockScreen(onBack: () -> Unit) {
-    // Implementación sencilla
-}
-
-@Composable
-fun ErrorScreen(errorInfo: String?, onRetry: () -> Unit) {
-    // Implementación sencilla
 }
