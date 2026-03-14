@@ -42,9 +42,8 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // Habilitar cookies globales
+        // Habilitar cookies globales de forma segura
         CookieManager.getInstance().setAcceptCookie(true)
-        // Eliminado setAcceptThirdPartyCookies(null, true) que causaba el crash
         
         tts = TextToSpeech(this, this)
         setupMediaSession()

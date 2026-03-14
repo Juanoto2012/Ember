@@ -68,12 +68,8 @@ fun BrowserApp(
     var tabs by remember { mutableStateOf(listOf(TabItem())) }
     var selectedTabIndex by remember { mutableIntStateOf(0) }
     var showTabManager by remember { mutableStateOf(false) }
-    var showHistory by remember { mutableStateOf(false) }
-    var showBookmarks by remember { mutableStateOf(false) }
-    var showDownloads by remember { mutableStateOf(false) }
-    var showSettings by remember { mutableStateOf(false) }
-    var showSecurityInfo by remember { mutableStateOf(false) }
-    var showSettingsScreen by remember { mutableStateOf(false) }
+    var currentScreen by remember { mutableStateOf<BrowserScreen>(BrowserScreen.Browser) }
+    var showMenu by remember { mutableStateOf(false) }
     
     val context = LocalContext.current
     val sharedPrefs = remember { context.getSharedPreferences("ember_prefs", Context.MODE_PRIVATE) }
@@ -89,6 +85,7 @@ fun BrowserApp(
     var showDownloadDialog by remember { mutableStateOf(false) }
     var permissionRequest by remember { mutableStateOf<Pair<PermissionRequest, String>?>(null) }
     var contextMenuInfo by remember { mutableStateOf<Pair<String, String>?>(null) } 
+    var showSecurityInfo by remember { mutableStateOf(false) }
     
     val currentTab = tabs.getOrNull(selectedTabIndex) ?: TabItem()
     val scope = rememberCoroutineScope()
@@ -100,6 +97,8 @@ fun BrowserApp(
     var showAddressSuggestions by remember { mutableStateOf(false) }
     val client = remember { OkHttpClient() }
     var suggestionJob: Job? by remember { mutableStateOf(null) }
+
+    var loadingProgress by remember { mutableIntStateOf(0) }
 
     fun getSearchUrl(query: String): String {
         return when (searchEngine) {
@@ -144,428 +143,214 @@ fun BrowserApp(
         showAddressSuggestions = false
     }
 
-    BackHandler(enabled = !showTabManager && !showHistory && !showBookmarks && !showDownloads && !showSettings && !showSecurityInfo && !showSettingsScreen && permissionRequest == null && contextMenuInfo == null) {
-        if (webView?.canGoBack() == true) {
-            webView?.goBack()
-        } else if (currentTab.url != "home") {
-            tabs = tabs.toMutableList().apply {
-                this[selectedTabIndex] = this[selectedTabIndex].copy(url = "home")
-            }
+    BackHandler(enabled = currentScreen != BrowserScreen.Browser || showTabManager || permissionRequest != null || contextMenuInfo != null || showSecurityInfo || showMenu) {
+        when {
+            showMenu -> showMenu = false
+            showTabManager -> showTabManager = false
+            showSecurityInfo -> showSecurityInfo = false
+            currentScreen != BrowserScreen.Browser -> currentScreen = BrowserScreen.Browser
+            else -> { /* Handled internally */ }
         }
     }
 
-    Scaffold(
-        topBar = {
-            if (!showTabManager && !showSettingsScreen && currentTab.url != "home") {
-                Column {
-                    TopAppBar(
-                        navigationIcon = {
-                            IconButton(onClick = { showSecurityInfo = true }) {
-                                val isHttps = currentTab.url.startsWith("https")
-                                Icon(
-                                    imageVector = if (isHttps) Icons.Default.Shield else Icons.Default.GppBad,
-                                    contentDescription = "Security",
-                                    tint = if (isHttps) MaterialTheme.colorScheme.primary else Color.Red
-                                )
-                            }
-                        },
-                        title = {
-                            Box {
-                                OutlinedTextField(
-                                    value = addressBarText,
-                                    onValueChange = { 
-                                        addressBarText = it
-                                        fetchAddressSuggestions(it)
-                                    },
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(48.dp),
-                                    shape = RoundedCornerShape(24.dp),
-                                    singleLine = true,
-                                    textStyle = MaterialTheme.typography.bodyMedium,
-                                    placeholder = { Text("Search or type URL", fontSize = 14.sp) },
-                                    keyboardOptions = KeyboardOptions(
-                                        keyboardType = KeyboardType.Uri,
-                                        imeAction = ImeAction.Go
-                                    ),
-                                    keyboardActions = KeyboardActions(
-                                        onGo = {
-                                            val query = addressBarText
-                                            val finalUrl = if (query.startsWith("http") || query.startsWith("file://")) query 
-                                                          else if (query.contains(".") && !query.contains(" ")) "https://$query"
-                                                          else getSearchUrl(query)
-                                            
-                                            tabs = tabs.toMutableList().apply {
-                                                this[selectedTabIndex] = this[selectedTabIndex].copy(url = finalUrl)
-                                            }
-                                            focusManager.clearFocus()
-                                            showAddressSuggestions = false
-                                        }
-                                    ),
-                                    colors = TextFieldDefaults.colors(
-                                        focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                                        focusedIndicatorColor = Color.Transparent,
-                                        unfocusedIndicatorColor = Color.Transparent
+    Box(modifier = Modifier.fillMaxSize()) {
+        when (currentScreen) {
+            BrowserScreen.Browser -> {
+                Scaffold(
+                    topBar = {
+                        if (!showTabManager && currentTab.url != "home") {
+                            Surface(color = MaterialTheme.colorScheme.surface, shadowElevation = 2.dp) {
+                                Column {
+                                    TopAppBar(
+                                        title = {
+                                            TextField(
+                                                value = addressBarText,
+                                                onValueChange = { addressBarText = it; fetchAddressSuggestions(it) },
+                                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).height(52.dp),
+                                                shape = RoundedCornerShape(26.dp),
+                                                singleLine = true,
+                                                textStyle = MaterialTheme.typography.bodyMedium,
+                                                placeholder = { Text("Search or type URL", fontSize = 14.sp) },
+                                                leadingIcon = {
+                                                    val isHttps = currentTab.url.startsWith("https")
+                                                    Icon(
+                                                        imageVector = if (isHttps) Icons.Default.Shield else Icons.Default.GppBad,
+                                                        contentDescription = "Security",
+                                                        tint = if (isHttps) MaterialTheme.colorScheme.primary else Color.Red,
+                                                        modifier = Modifier.size(20.dp).clickable { showSecurityInfo = true }
+                                                    )
+                                                },
+                                                trailingIcon = { if (addressBarText.isNotEmpty()) IconButton(onClick = { addressBarText = "" }) { Icon(Icons.Default.Close, "Clear", modifier = Modifier.size(20.dp)) } },
+                                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Go),
+                                                keyboardActions = KeyboardActions(onGo = {
+                                                    val finalUrl = if (addressBarText.startsWith("http") || addressBarText.startsWith("file://")) addressBarText 
+                                                                  else if (addressBarText.contains(".") && !addressBarText.contains(" ")) "https://$addressBarText"
+                                                                  else getSearchUrl(addressBarText)
+                                                    tabs = tabs.toMutableList().apply { this[selectedTabIndex] = this[selectedTabIndex].copy(url = finalUrl) }
+                                                    focusManager.clearFocus()
+                                                    showAddressSuggestions = false
+                                                }),
+                                                colors = TextFieldDefaults.colors(
+                                                    focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                                    focusedIndicatorColor = Color.Transparent,
+                                                    unfocusedIndicatorColor = Color.Transparent
+                                                )
+                                            )
+                                        },
+                                        actions = { IconButton(onClick = { webView?.reload() }) { Icon(Icons.Default.Refresh, "Reload") } }
                                     )
-                                )
-                            }
-                        },
-                        actions = {
-                            IconButton(onClick = { webView?.reload() }) {
-                                Icon(Icons.Default.Refresh, contentDescription = "Reload")
-                            }
-                        },
-                        colors = TopAppBarDefaults.topAppBarColors(
-                            containerColor = MaterialTheme.colorScheme.surface,
-                            titleContentColor = MaterialTheme.colorScheme.onSurface
-                        ),
-                        modifier = Modifier.shadow(2.dp)
-                    )
-                    
-                    if (showAddressSuggestions) {
-                        Popup(
-                            onDismissRequest = { showAddressSuggestions = false },
-                            properties = PopupProperties(focusable = false)
-                        ) {
-                            Surface(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 16.dp),
-                                color = MaterialTheme.colorScheme.surface,
-                                shape = RoundedCornerShape(bottomStart = 16.dp, bottomEnd = 16.dp),
-                                shadowElevation = 8.dp
-                            ) {
-                                LazyColumn(modifier = Modifier.heightIn(max = 300.dp)) {
-                                    items(addressSuggestions) { suggestion ->
-                                        ListItem(
-                                            headlineContent = { Text(suggestion) },
-                                            modifier = Modifier.clickable {
-                                                addressBarText = suggestion
-                                                val finalUrl = getSearchUrl(suggestion)
-                                                tabs = tabs.toMutableList().apply {
-                                                    this[selectedTabIndex] = this[selectedTabIndex].copy(url = finalUrl)
-                                                }
-                                                focusManager.clearFocus()
-                                                showAddressSuggestions = false
-                                            },
-                                            leadingContent = { Icon(Icons.Default.Search, null, tint = Color.Gray, modifier = Modifier.size(18.dp)) }
+                                    
+                                    AnimatedVisibility(
+                                        visible = loadingProgress > 0 && loadingProgress < 100,
+                                        enter = fadeIn() + expandVertically(),
+                                        exit = fadeOut() + shrinkVertically()
+                                    ) {
+                                        LinearProgressIndicator(
+                                            progress = { loadingProgress / 100f },
+                                            modifier = Modifier.fillMaxWidth().height(2.dp),
+                                            color = MaterialTheme.colorScheme.primary,
+                                            trackColor = Color.Transparent,
                                         )
+                                    }
+
+                                    if (showAddressSuggestions) {
+                                        Popup(onDismissRequest = { showAddressSuggestions = false }, properties = PopupProperties(focusable = false)) {
+                                            Surface(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(bottomStart = 16.dp, bottomEnd = 16.dp), shadowElevation = 8.dp) {
+                                                LazyColumn(modifier = Modifier.heightIn(max = 300.dp)) {
+                                                    items(addressSuggestions) { suggestion ->
+                                                        ListItem(
+                                                            headlineContent = { Text(suggestion) },
+                                                            modifier = Modifier.clickable {
+                                                                addressBarText = suggestion
+                                                                tabs = tabs.toMutableList().apply { this[selectedTabIndex] = this[selectedTabIndex].copy(url = getSearchUrl(suggestion)) }
+                                                                focusManager.clearFocus()
+                                                                showAddressSuggestions = false
+                                                            },
+                                                            leadingContent = { Icon(Icons.Default.Search, null, tint = Color.Gray, modifier = Modifier.size(18.dp)) }
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
                         }
-                    }
-                }
-            }
-        },
-        bottomBar = {
-            if (!showTabManager && !showSettingsScreen) {
-                BottomAppBar(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    contentPadding = PaddingValues(horizontal = 4.dp),
-                    modifier = Modifier.height(56.dp).shadow(8.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceAround,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        IconButton(onClick = { if (webView?.canGoBack() == true) webView?.goBack() }) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", modifier = Modifier.size(24.dp))
-                        }
-                        IconButton(onClick = { if (webView?.canGoForward() == true) webView?.goForward() }) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowForward, "Forward", modifier = Modifier.size(24.dp))
-                        }
-                        IconButton(onClick = { showSettings = true }) {
-                            Icon(Icons.Default.Menu, "Menu", modifier = Modifier.size(24.dp))
-                        }
-                        IconButton(onClick = { showTabManager = true }) {
-                            Box(
-                                modifier = Modifier
-                                    .size(22.dp)
-                                    .border(1.8.dp, MaterialTheme.colorScheme.onSurface, RoundedCornerShape(4.dp)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = tabs.size.toString(),
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
+                    },
+                    bottomBar = {
+                        if (!showTabManager) {
+                            BottomAppBar(containerColor = MaterialTheme.colorScheme.surface, contentPadding = PaddingValues(horizontal = 4.dp), modifier = Modifier.height(56.dp).shadow(8.dp) ) {
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround, verticalAlignment = Alignment.CenterVertically) {
+                                    IconButton(onClick = { if (webView?.canGoBack() == true) webView?.goBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
+                                    IconButton(onClick = { if (webView?.canGoForward() == true) webView?.goForward() }) { Icon(Icons.AutoMirrored.Filled.ArrowForward, "Forward") }
+                                    
+                                    IconButton(onClick = { showMenu = true }) { Icon(Icons.Default.Menu, "Menu") }
+                                    
+                                    IconButton(onClick = { showTabManager = true }) {
+                                        Box(modifier = Modifier.size(22.dp).border(1.8.dp, MaterialTheme.colorScheme.onSurface, RoundedCornerShape(4.dp)), contentAlignment = Alignment.Center) {
+                                            Text(text = tabs.size.toString(), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+                                    IconButton(onClick = { tabs = tabs.toMutableList().apply { this[selectedTabIndex] = this[selectedTabIndex].copy(url = "home") } }) { Icon(Icons.Default.Home, "Home") }
+                                }
                             }
                         }
-                        IconButton(onClick = { 
-                            tabs = tabs.toMutableList().apply {
-                                this[selectedTabIndex] = this[selectedTabIndex].copy(url = "home")
-                            }
-                        }) {
-                            Icon(Icons.Default.Home, "Home", modifier = Modifier.size(24.dp))
-                        }
                     }
-                }
-            }
-        }
-    ) { paddingValues ->
-        Box(modifier = Modifier.padding(paddingValues).fillMaxSize()) {
-            if (currentTab.url == "home") {
-                HomeScreen(
-                    onSearch = { query ->
-                        val finalUrl = if (query.startsWith("http") || query.startsWith("file://")) query 
-                                      else if (query.contains(".") && !query.contains(" ")) "https://$query"
-                                      else getSearchUrl(query)
-                        tabs = tabs.toMutableList().apply {
-                            this[selectedTabIndex] = this[selectedTabIndex].copy(url = finalUrl)
-                        }
-                    },
-                    onConfigureHomepage = { url ->
-                        customHomepageUrl = url
-                        sharedPrefs.edit { putString("homepage_url", url) }
-                    }
-                )
-            } else {
-                BrowserWebViewContainer(
-                    url = currentTab.url,
-                    onPageFinished = { url, title ->
-                        tabs = tabs.toMutableList().apply {
-                            this[selectedTabIndex] = this[selectedTabIndex].copy(url = url, title = title ?: url)
-                        }
-                        scope.launch {
-                            database.browserDao().insertHistory(HistoryItem(url = url, title = title ?: url))
-                        }
-                    },
-                    onDownloadRequested = { url ->
-                        downloadUrl = url
-                        showDownloadDialog = true
-                    },
-                    onWebViewCreated = { 
-                        webView = it
-                        onWebViewCreated(it)
-                    },
-                    onSpeak = onSpeak,
-                    onProgressChanged = { /* handle progress */ },
-                    isRefreshing = false,
-                    onRefresh = { webView?.reload() },
-                    onFaviconChanged = { bitmap ->
-                        tabs = tabs.toMutableList().apply {
-                            this[selectedTabIndex] = this[selectedTabIndex].copy(favicon = bitmap)
-                        }
-                    },
-                    onPermissionRequested = { request, url ->
-                        permissionRequest = request to url
-                    },
-                    onImageLongClick = { url ->
-                        contextMenuInfo = "Imagen" to url
-                    },
-                    enhancedProtection = enhancedProtection,
-                    onMediaStatus = onMediaStatus,
-                    isAdBlockerEnabled = isAdBlockerEnabled
-                )
-            }
-
-            if (showTabManager) {
-                TabManagerView(
-                    tabs = tabs,
-                    selectedIndex = selectedTabIndex,
-                    onTabSelected = { index -> selectedTabIndex = index; showTabManager = false },
-                    onTabClosed = { index ->
-                        val newList = tabs.toMutableList().apply { removeAt(index) }
-                        if (newList.isEmpty()) {
-                            tabs = listOf(TabItem())
-                            selectedTabIndex = 0
+                ) { paddingValues ->
+                    Box(modifier = Modifier.padding(paddingValues).fillMaxSize()) {
+                        if (currentTab.url == "home") {
+                            HomeScreen(onSearch = { query ->
+                                val finalUrl = if (query.startsWith("http") || query.startsWith("file://")) query 
+                                              else if (query.contains(".") && !query.contains(" ")) "https://$query"
+                                              else getSearchUrl(query)
+                                tabs = tabs.toMutableList().apply { this[selectedTabIndex] = this[selectedTabIndex].copy(url = finalUrl) }
+                            }, onConfigureHomepage = { url -> customHomepageUrl = url; sharedPrefs.edit { putString("homepage_url", url) } })
                         } else {
-                            tabs = newList
-                            if (selectedTabIndex >= tabs.size) selectedTabIndex = tabs.size - 1
+                            BrowserWebViewContainer(
+                                url = currentTab.url,
+                                onPageFinished = { url, title ->
+                                    tabs = tabs.toMutableList().apply { this[selectedTabIndex] = this[selectedTabIndex].copy(url = url, title = title ?: url) }
+                                    scope.launch { database.browserDao().insertHistory(HistoryItem(url = url, title = title ?: url)) }
+                                },
+                                onDownloadRequested = { url -> downloadUrl = url; showDownloadDialog = true },
+                                onWebViewCreated = { webView = it; onWebViewCreated(it) },
+                                onSpeak = onSpeak,
+                                onProgressChanged = { loadingProgress = it },
+                                isRefreshing = false,
+                                onRefresh = { webView?.reload() },
+                                onFaviconChanged = { bitmap -> tabs = tabs.toMutableList().apply { this[selectedTabIndex] = this[selectedTabIndex].copy(favicon = bitmap) } },
+                                onPermissionRequested = { request, url -> permissionRequest = request to url },
+                                onImageLongClick = { url -> contextMenuInfo = "Imagen" to url },
+                                enhancedProtection = enhancedProtection,
+                                onMediaStatus = onMediaStatus,
+                                isAdBlockerEnabled = isAdBlockerEnabled
+                            )
                         }
-                    },
-                    onNewTab = {
-                        tabs = tabs + TabItem()
-                        selectedTabIndex = tabs.size - 1
-                        showTabManager = false
-                    },
-                    onClose = { showTabManager = false }
-                )
-            }
-
-            if (showHistory) {
-                val historyItems by database.browserDao().getAllHistory().collectAsState(initial = emptyList())
-                HistoryDialog(
-                    items = historyItems,
-                    onUrlClick = { url ->
-                        tabs = tabs.toMutableList().apply {
-                            this[selectedTabIndex] = this[selectedTabIndex].copy(url = url)
-                        }
-                        showHistory = false
-                        showSettings = false
-                    },
-                    onDismiss = { showHistory = false },
-                    onClearHistory = { scope.launch { database.browserDao().clearHistory() } }
-                )
-            }
-
-            if (showBookmarks) {
-                val bookmarkItems by database.browserDao().getAllBookmarks().collectAsState(initial = emptyList())
-                BookmarkDialog(
-                    items = bookmarkItems,
-                    onUrlClick = { url ->
-                        tabs = tabs.toMutableList().apply {
-                            this[selectedTabIndex] = this[selectedTabIndex].copy(url = url)
-                        }
-                        showBookmarks = false
-                        showSettings = false
-                    },
-                    onDismiss = { showBookmarks = false },
-                    onAddBookmark = {
-                        scope.launch {
-                            database.browserDao().insertBookmark(BookmarkItem(url = currentTab.url, title = currentTab.title, favicon = currentTab.favicon?.toByteArray()))
-                        }
-                    },
-                    onDeleteBookmark = { id -> scope.launch { database.browserDao().deleteBookmark(id) } }
-                )
-            }
-
-            if (showDownloads) {
-                val downloadItems by database.browserDao().getAllDownloads().collectAsState(initial = emptyList())
-                DownloadManagerDialog(items = downloadItems, onDismiss = { showDownloads = false })
-            }
-
-            if (showSettings) {
-                SettingsMenu(
-                    onDismiss = { showSettings = false },
-                    onHistory = { showHistory = true },
-                    onDownloads = { showDownloads = true },
-                    onBookmarks = { showBookmarks = true },
-                    onOpenSettings = { showSettingsScreen = true; showSettings = false }
-                )
-            }
-
-            if (showSecurityInfo) {
-                SecurityDialog(
-                    url = currentTab.url,
-                    certificate = webView?.certificate,
-                    onDismiss = { showSecurityInfo = false },
-                    onClearSiteData = {
-                        WebStorage.getInstance().deleteOrigin(currentTab.url.toUri().host ?: "")
-                        webView?.clearCache(true)
-                        showSecurityInfo = false
-                        Toast.makeText(context, "Datos del sitio borrados", Toast.LENGTH_SHORT).show()
                     }
-                )
+                }
             }
-
-            if (showDownloadDialog) {
-                DownloadConfirmDialog(
-                    url = downloadUrl,
-                    defaultPath = downloadPath,
-                    onConfirm = { fileName, path ->
-                        startDownload(context, downloadUrl, fileName, path, database)
-                        showDownloadDialog = false
-                    },
-                    onDismiss = { showDownloadDialog = false }
-                )
+            BrowserScreen.History -> {
+                val historyItems by database.browserDao().getAllHistory().collectAsState(initial = emptyList())
+                HistoryScreen(items = historyItems, onUrlClick = { url: String -> tabs = tabs.toMutableList().apply { this[selectedTabIndex] = this[selectedTabIndex].copy(url = url) }; currentScreen = BrowserScreen.Browser }, onBack = { currentScreen = BrowserScreen.Browser }, onClearHistory = { scope.launch { database.browserDao().clearHistory() } })
             }
-
-            contextMenuInfo?.let { (label, url) ->
-                CromiteContextMenu(
-                    title = label,
-                    url = url,
-                    onDismiss = { contextMenuInfo = null },
-                    actions = listOf(
-                        { ContextAction("Abrir en pestaña nueva", Icons.Default.Tab) {
-                            tabs = tabs + TabItem(url = url)
-                            selectedTabIndex = tabs.size - 1
-                            contextMenuInfo = null
-                        } },
-                        { ContextAction("Copiar enlace", Icons.Default.ContentCopy) {
-                            clipboardManager.setText(AnnotatedString(url))
-                            Toast.makeText(context, "Enlace copiado", Toast.LENGTH_SHORT).show()
-                            contextMenuInfo = null
-                        } },
-                        { ContextAction("Descargar", Icons.Default.Download) {
-                            downloadUrl = url
-                            showDownloadDialog = true
-                            contextMenuInfo = null
-                        } },
-                        { ContextAction("Compartir", Icons.Default.Share) {
-                            val intent = Intent(Intent.ACTION_SEND).apply {
-                                type = "text/plain"
-                                putExtra(Intent.EXTRA_TEXT, url)
-                            }
-                            context.startActivity(Intent.createChooser(intent, "Compartir enlace"))
-                            contextMenuInfo = null
-                        } }
-                    )
-                )
+            BrowserScreen.Bookmarks -> {
+                val bookmarkItems by database.browserDao().getAllBookmarks().collectAsState(initial = emptyList())
+                BookmarkScreen(items = bookmarkItems, onUrlClick = { url: String -> tabs = tabs.toMutableList().apply { this[selectedTabIndex] = this[selectedTabIndex].copy(url = url) }; currentScreen = BrowserScreen.Browser }, onBack = { currentScreen = BrowserScreen.Browser }, onAddBookmark = { scope.launch { database.browserDao().insertBookmark(BookmarkItem(url = currentTab.url, title = currentTab.title, favicon = currentTab.favicon?.toByteArray())) } }, onDeleteBookmark = { id: Long -> scope.launch { database.browserDao().deleteBookmark(id) } })
             }
-
-            if (showSettingsScreen) {
+            BrowserScreen.Downloads -> {
+                val downloadItems by database.browserDao().getAllDownloads().collectAsState(initial = emptyList())
+                DownloadScreen(items = downloadItems, onBack = { currentScreen = BrowserScreen.Browser })
+            }
+            BrowserScreen.Settings -> {
                 SettingsScreen(
                     enhancedProtection = enhancedProtection,
-                    onEnhancedProtectionChange = {
-                        enhancedProtection = it
-                        sharedPrefs.edit { putBoolean("enhanced_protection", it) }
-                    },
+                    onEnhancedProtectionChange = { enhancedProtection = it; sharedPrefs.edit { putBoolean("enhanced_protection", it) } },
                     searchEngine = searchEngine,
-                    onSearchEngineChange = {
-                        searchEngine = it
-                        sharedPrefs.edit { putString("search_engine", it) }
-                    },
-                    onResetHome = {
-                        customHomepageUrl = ""
-                        sharedPrefs.edit { remove("homepage_url") }
-                    },
-                    onClearData = {
-                        webView?.clearCache(true)
-                        webView?.clearHistory()
-                        webView?.clearFormData()
-                        CookieManager.getInstance().removeAllCookies(null)
-                        Toast.makeText(context, "Todos los datos borrados", Toast.LENGTH_SHORT).show()
-                    },
-                    onBack = { showSettingsScreen = false },
+                    onSearchEngineChange = { searchEngine = it; sharedPrefs.edit { putString("search_engine", it) } },
+                    onResetHome = { customHomepageUrl = ""; sharedPrefs.edit { remove("homepage_url") } },
+                    onClearData = { webView?.clearCache(true); webView?.clearHistory(); webView?.clearFormData(); CookieManager.getInstance().removeAllCookies(null); Toast.makeText(context, "Todos los datos borrados", Toast.LENGTH_SHORT).show() },
+                    onBack = { currentScreen = BrowserScreen.Browser },
                     downloadPath = downloadPath,
-                    onDownloadPathChange = {
-                        downloadPath = it
-                        sharedPrefs.edit { putString("download_path", it) }
-                    },
-                    onReadPage = {
-                        webView?.evaluateJavascript("(function() { return document.body.innerText; })();") { text ->
-                            onSpeak(text ?: "No se pudo leer el contenido")
-                        }
-                    },
+                    onDownloadPathChange = { downloadPath = it; sharedPrefs.edit { putString("download_path", it) } },
+                    onReadPage = { webView?.evaluateJavascript("(function() { return document.body.innerText; })();") { text -> onSpeak(text ?: "No se pudo leer el contenido") } },
                     isAdBlockerEnabled = isAdBlockerEnabled,
-                    onAdBlockerChange = {
-                        isAdBlockerEnabled = it
-                        sharedPrefs.edit { putBoolean("ad_blocker_enabled", it) }
-                    }
+                    onAdBlockerChange = { isAdBlockerEnabled = it; sharedPrefs.edit { putBoolean("ad_blocker_enabled", it) } }
                 )
             }
         }
-    }
-}
 
-@Composable
-fun SettingsMenu(onDismiss: () -> Unit, onHistory: () -> Unit, onDownloads: () -> Unit, onBookmarks: () -> Unit, onOpenSettings: () -> Unit) {
-    Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(0.4f)).clickable { onDismiss() }) {
-        Surface(modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth(), shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp), color = MaterialTheme.colorScheme.surface) {
-            Column(modifier = Modifier.padding(24.dp).navigationBarsPadding()) {
-                Text(text = "Ember Menu", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(bottom = 16.dp))
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
-                    MenuActionItem(Icons.Outlined.History, "History") { onHistory() }
-                    MenuActionItem(Icons.Outlined.Download, "Downloads") { onDownloads() }
-                    MenuActionItem(Icons.Outlined.StarOutline, "Bookmarks") { onBookmarks() }
-                    MenuActionItem(Icons.Outlined.Settings, "Settings") { onOpenSettings() }
-                }
-                HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
-                ListItem(headlineContent = { Text("Exit") }, leadingContent = { Icon(Icons.AutoMirrored.Filled.ExitToApp, null) }, modifier = Modifier.clickable { /* Exit */ })
-            }
+        if (showTabManager) {
+            TabManagerView(tabs = tabs, selectedIndex = selectedTabIndex, onTabSelected = { index -> selectedTabIndex = index; showTabManager = false }, onTabClosed = { index -> val newList = tabs.toMutableList().apply { removeAt(index) }; if (newList.isEmpty()) { tabs = listOf(TabItem()); selectedTabIndex = 0 } else { tabs = newList; if (selectedTabIndex >= tabs.size) selectedTabIndex = tabs.size - 1 } }, onNewTab = { tabs = tabs + TabItem(); selectedTabIndex = tabs.size - 1; showTabManager = false }, onClose = { showTabManager = false })
+        }
+
+        if (showMenu) {
+            SettingsMenu(
+                onDismiss = { showMenu = false },
+                onHistory = { currentScreen = BrowserScreen.History; showMenu = false },
+                onDownloads = { currentScreen = BrowserScreen.Downloads; showMenu = false },
+                onBookmarks = { currentScreen = BrowserScreen.Bookmarks; showMenu = false },
+                onOpenSettings = { currentScreen = BrowserScreen.Settings; showMenu = false }
+            )
+        }
+
+        if (showSecurityInfo) {
+            SecurityDialog(url = currentTab.url, certificate = webView?.certificate, onDismiss = { showSecurityInfo = false }, onClearSiteData = {
+                WebStorage.getInstance().deleteOrigin(currentTab.url.toUri().host ?: "")
+                webView?.clearCache(true)
+                showSecurityInfo = false
+                Toast.makeText(context, "Datos del sitio borrados", Toast.LENGTH_SHORT).show()
+            })
+        }
+
+        if (showDownloadDialog) {
+            DownloadConfirmDialog(url = downloadUrl, defaultPath = downloadPath, onConfirm = { fileName, path -> startDownload(context, downloadUrl, fileName, path, database); showDownloadDialog = false }, onDismiss = { showDownloadDialog = false })
+        }
+
+        contextMenuInfo?.let { (label, url) ->
+            CromiteContextMenu(title = label, url = url, onDismiss = { contextMenuInfo = null }, actions = listOf( { ContextAction("Abrir en pestaña nueva", Icons.Default.Tab) { tabs = tabs + TabItem(url = url); selectedTabIndex = tabs.size - 1; contextMenuInfo = null } }, { ContextAction("Copiar enlace", Icons.Default.ContentCopy) { clipboardManager.setText(AnnotatedString(url)); Toast.makeText(context, "Enlace copiado", Toast.LENGTH_SHORT).show(); contextMenuInfo = null } }, { ContextAction("Descargar", Icons.Default.Download) { downloadUrl = url; showDownloadDialog = true; contextMenuInfo = null } }, { ContextAction("Compartir", Icons.Default.Share) { val intent = Intent(Intent.ACTION_SEND).apply { type = "text/plain"; putExtra(Intent.EXTRA_TEXT, url) }; context.startActivity(Intent.createChooser(intent, "Compartir enlace")); contextMenuInfo = null } } ))
         }
     }
 }
 
-@Composable
-fun MenuActionItem(icon: ImageVector, label: String, onClick: () -> Unit) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable { onClick() }) {
-        Icon(icon, null, modifier = Modifier.size(28.dp), tint = MaterialTheme.colorScheme.primary)
-        Text(label, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
-    }
-}
+enum class BrowserScreen { Browser, History, Bookmarks, Downloads, Settings }
