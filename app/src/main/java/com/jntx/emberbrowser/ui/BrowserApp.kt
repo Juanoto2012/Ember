@@ -63,6 +63,7 @@ import org.json.JSONArray
 fun BrowserApp(
     database: AppDatabase, 
     onSpeak: (String) -> Unit, 
+    onGetVoices: () -> String,
     onMediaStatus: (String, String?, Boolean) -> Unit,
     onWebViewCreated: (WebView) -> Unit
 ) {
@@ -284,6 +285,7 @@ fun BrowserApp(
                                 onDownloadRequested = { url -> downloadUrl = url; showDownloadDialog = true },
                                 onWebViewCreated = { webView = it; onWebViewCreated(it) },
                                 onSpeak = onSpeak,
+                                onGetVoices = onGetVoices,
                                 onProgressChanged = { loadingProgress = it },
                                 isRefreshing = false,
                                 onRefresh = { webView?.reload() },

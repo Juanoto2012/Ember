@@ -33,6 +33,32 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <service android:name=".MediaService"
+            android:exported="true"
+            android:permission="android.permission.BIND_JOB_SERVICE"
+            tools:ignore="ExportedService">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </service>
+
+        <receiver android:name="androidx.media.session.MediaButtonReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </receiver>
+
+        <receiver android:name=".MediaControlReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="ACTION_PLAY_PAUSE" />
+                <action android:name="ACTION_PREVIOUS" />
+                <action android:name="ACTION_NEXT" />
+            </intent-filter>
+        </receiver>
+
     </application>
 
 </manifest>

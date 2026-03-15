@@ -15,10 +15,18 @@ import kotlinx.coroutines.launch
 import java.io.ByteArrayOutputStream
 import java.io.File
 
-class TtsInterface(private val onSpeak: (String) -> Unit) {
+class TtsInterface(
+    private val onSpeak: (String) -> Unit,
+    private val onGetVoices: () -> String
+) {
     @JavascriptInterface
     fun speak(text: String) {
         onSpeak(text)
+    }
+
+    @JavascriptInterface
+    fun getVoices(): String {
+        return onGetVoices()
     }
 }
 

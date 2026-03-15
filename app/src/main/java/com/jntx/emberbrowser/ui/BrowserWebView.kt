@@ -20,6 +20,7 @@ fun BrowserWebViewContainer(
     onDownloadRequested: (String) -> Unit,
     onWebViewCreated: (WebView) -> Unit,
     onSpeak: (String) -> Unit,
+    onGetVoices: () -> String,
     onProgressChanged: (Int) -> Unit,
     isRefreshing: Boolean,
     onRefresh: () -> Unit,
@@ -46,6 +47,7 @@ fun BrowserWebViewContainer(
             onDownloadRequested = onDownloadRequested,
             onWebViewCreated = onWebViewCreated,
             onSpeak = onSpeak,
+            onGetVoices = onGetVoices,
             onProgressChanged = onProgressChanged,
             onFaviconChanged = onFaviconChanged,
             onPermissionRequested = onPermissionRequested,
@@ -67,6 +69,7 @@ fun BrowserWebView(
     onDownloadRequested: (String) -> Unit,
     onWebViewCreated: (WebView) -> Unit,
     onSpeak: (String) -> Unit,
+    onGetVoices: () -> String,
     onProgressChanged: (Int) -> Unit,
     onFaviconChanged: (Bitmap?) -> Unit,
     onPermissionRequested: (PermissionRequest, String) -> Unit,
@@ -99,7 +102,7 @@ fun BrowserWebView(
                 }
                 
                 CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
-                addJavascriptInterface(TtsInterface(onSpeak), "EmberTTS")
+                addJavascriptInterface(TtsInterface(onSpeak, onGetVoices), "EmberTTS")
                 
                 setOnLongClickListener {
                     val result = hitTestResult
@@ -131,6 +134,7 @@ fun BrowserWebView(
                             
                             view?.evaluateJavascript("""
                                 (function() {
+                                    // Mejorar Media Session y control de reproducción
                                     var media = document.querySelector('video') || document.querySelector('audio');
                                     if (media) {
                                         var updateMedia = function() {
@@ -156,16 +160,69 @@ fun BrowserWebView(
                                         };
                                         
                                         var sendProgress = function() {
-                                            if (media && !media.paused) {
+                                            if (media && !media.paused && media.duration) {
                                                 EmberTTS.speak("__MEDIA_PROGRESS__" + (media.currentTime * 1000) + "|" + (media.duration * 1000));
                                             }
                                         };
                                         
                                         media.onplay = updateMedia;
                                         media.onpause = updateMedia;
+                                        media.onended = function() { EmberTTS.speak("__MEDIA_PAUSE__" + document.title + "|Ember Browser"); };
+                                        
                                         setTimeout(updateMedia, 2000);
                                         setInterval(sendProgress, 1000);
                                         setInterval(function() { if (!media.paused) updateMedia(); }, 10000);
+                                    }
+
+                                    // Puente de Voz (Speech Synthesis API)
+                                    if (window.EmberTTS) {
+                                        const ttsBridge = {
+                                            speak: function(utterance) {
+                                                if (utterance && utterance.text) {
+                                                    EmberTTS.speak("__TTS_SPEAK__" + utterance.text);
+                                                    if (utterance.onstart) utterance.onstart();
+                                                    // Simular finalización basada en longitud del texto
+                                                    setTimeout(() => { if (utterance.onend) utterance.onend(); }, utterance.text.length * 80);
+                                                }
+                                            },
+                                            cancel: function() { EmberTTS.speak("__TTS_CANCEL__"); },
+                                            pause: function() { EmberTTS.speak("__TTS_PAUSE__"); },
+                                            resume: function() { EmberTTS.speak("__TTS_RESUME__"); },
+                                            getVoices: function() { 
+                                                try {
+                                                    let v = JSON.parse(EmberTTS.getVoices());
+                                                    if (v && v.length > 0) return v;
+                                                } catch(e) {}
+                                                return [{ name: 'Ember Voice', lang: 'es-ES', default: true }];
+                                            },
+                                            onvoiceschanged: null,
+                                            paused: false,
+                                            pending: false,
+                                            speaking: false
+                                        };
+
+                                        try {
+                                            Object.defineProperty(window, 'speechSynthesis', {
+                                                value: ttsBridge,
+                                                configurable: true,
+                                                enumerable: true,
+                                                writable: true
+                                            });
+                                            
+                                            if (typeof SpeechSynthesisUtterance === 'undefined') {
+                                                window.SpeechSynthesisUtterance = function(text) { 
+                                                    this.text = text;
+                                                    this.onstart = null;
+                                                    this.onend = null;
+                                                };
+                                            }
+                                            
+                                            // Disparar evento de voces cargadas
+                                            if (window.speechSynthesis.onvoiceschanged) {
+                                                window.speechSynthesis.onvoiceschanged();
+                                            }
+                                            window.dispatchEvent(new Event('voiceschanged'));
+                                        } catch(e) { console.log('Error in TTS Bridge injection', e); }
                                     }
                                 })();
                             """.trimIndent(), null)

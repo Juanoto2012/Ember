@@ -2,6 +2,8 @@ package com.jntx.emberbrowser
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.Build
@@ -10,6 +12,7 @@ import android.speech.tts.TextToSpeech
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
+import android.view.KeyEvent
 import android.webkit.CookieManager
 import android.webkit.WebView
 import androidx.activity.ComponentActivity
@@ -20,17 +23,19 @@ import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
 import androidx.core.app.NotificationCompat
 import androidx.lifecycle.lifecycleScope
+import androidx.media.session.MediaButtonReceiver
 import com.jntx.emberbrowser.ui.BrowserApp
 import com.jntx.emberbrowser.ui.theme.EmberTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
 import java.net.URL
 import java.util.Locale
 
 class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     private var tts: TextToSpeech? = null
-    private var mediaSession: MediaSessionCompat? = null
     private var currentWebView: WebView? = null
     private var currentArtwork: Bitmap? = null
     private var lastTitle = ""
@@ -39,10 +44,13 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     private var currentPosition = 0L
     private var currentDuration = 0L
 
+    companion object {
+        var mediaSession: MediaSessionCompat? = null
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // Habilitar cookies globales de forma segura
         CookieManager.getInstance().setAcceptCookie(true)
         
         tts = TextToSpeech(this, this)
@@ -56,6 +64,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                     BrowserApp(
                         database = database,
                         onSpeak = ::speak,
+                        onGetVoices = ::getAvailableVoicesJson,
                         onMediaStatus = ::updateMediaStatus,
                         onWebViewCreated = { currentWebView = it }
                     )
@@ -67,19 +76,44 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     private fun setupMediaSession() {
         mediaSession = MediaSessionCompat(this, "EmberMediaSession").apply {
             setFlags(MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS or MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS)
+            
+            // PendingIntent para MediaButtonReceiver (obligatorio para el sistema)
+            val mediaButtonIntent = Intent(Intent.ACTION_MEDIA_BUTTON)
+            mediaButtonIntent.setClass(this@MainActivity, MediaButtonReceiver::class.java)
+            val pendingIntent = PendingIntent.getBroadcast(this@MainActivity, 0, mediaButtonIntent, PendingIntent.FLAG_IMMUTABLE)
+            setMediaButtonReceiver(pendingIntent)
+
             setCallback(object : MediaSessionCompat.Callback() {
                 override fun onPlay() { togglePlayback() }
                 override fun onPause() { togglePlayback() }
                 override fun onSkipToNext() { skipNext() }
                 override fun onSkipToPrevious() { skipPrevious() }
                 override fun onSeekTo(pos: Long) { seekTo(pos) }
+                override fun onMediaButtonEvent(mediaButtonEvent: Intent?): Boolean {
+                    val keyEvent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        mediaButtonEvent?.getParcelableExtra(Intent.EXTRA_KEY_EVENT, KeyEvent::class.java)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        mediaButtonEvent?.getParcelableExtra(Intent.EXTRA_KEY_EVENT)
+                    }
+                    if (keyEvent?.action == KeyEvent.ACTION_DOWN) {
+                        when (keyEvent.keyCode) {
+                            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.KEYCODE_HEADSETHOOK -> togglePlayback()
+                            KeyEvent.KEYCODE_MEDIA_PLAY -> togglePlayback()
+                            KeyEvent.KEYCODE_MEDIA_PAUSE -> togglePlayback()
+                            KeyEvent.KEYCODE_MEDIA_NEXT -> skipNext()
+                            KeyEvent.KEYCODE_MEDIA_PREVIOUS -> skipPrevious()
+                        }
+                    }
+                    return true
+                }
             })
             isActive = true
         }
     }
 
     private fun updateMediaStatus(title: String, artist: String?, isPlaying: Boolean) {
-        lastTitle = title
+        lastTitle = if (title.isBlank()) "Ember Browser" else title
         lastArtist = artist ?: "Ember Browser"
         lastIsPlaying = isPlaying
         updatePlaybackState()
@@ -137,7 +171,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         lifecycleScope.launch(Dispatchers.Main) {
             currentWebView?.evaluateJavascript("""
                 (function() {
-                    var nextBtn = document.querySelector('.ytp-next-button') || document.querySelector('[aria-label="Siguiente"]') || document.querySelector('[aria-label="Next"]');
+                    var nextBtn = document.querySelector('.ytp-next-button') || document.querySelector('[aria-label*="Siguiente"]') || document.querySelector('[aria-label*="Next"]');
                     if (nextBtn) nextBtn.click();
                     else {
                         var media = document.querySelector('video') || document.querySelector('audio');
@@ -152,7 +186,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         lifecycleScope.launch(Dispatchers.Main) {
             currentWebView?.evaluateJavascript("""
                 (function() {
-                    var prevBtn = document.querySelector('.ytp-prev-button') || document.querySelector('[aria-label="Anterior"]') || document.querySelector('[aria-label="Previous"]');
+                    var prevBtn = document.querySelector('.ytp-prev-button') || document.querySelector('[aria-label*="Anterior"]') || document.querySelector('[aria-label*="Previous"]');
                     if (prevBtn) prevBtn.click();
                     else window.history.back();
                 })();
@@ -183,46 +217,74 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         val session = mediaSession ?: return
         val manager = getSystemService(NotificationManager::class.java) as NotificationManager
         
-        if (!isPlaying && title == "Ember Browser" && currentPosition == 0L) {
-            manager.cancel(1)
-            return
-        }
-
         val playPauseIcon = if (isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play
         
+        // Usar intents explícitos hacia nuestro propio MediaControlReceiver
+        val prevIntent = PendingIntent.getBroadcast(this, 10, Intent(this, MediaControlReceiver::class.java).apply { action = "ACTION_PREVIOUS" }, PendingIntent.FLAG_IMMUTABLE)
+        val playPauseIntent = PendingIntent.getBroadcast(this, 11, Intent(this, MediaControlReceiver::class.java).apply { action = "ACTION_PLAY_PAUSE" }, PendingIntent.FLAG_IMMUTABLE)
+        val nextIntent = PendingIntent.getBroadcast(this, 12, Intent(this, MediaControlReceiver::class.java).apply { action = "ACTION_NEXT" }, PendingIntent.FLAG_IMMUTABLE)
+
         val notification = NotificationCompat.Builder(this, "ember_media")
-            .setSmallIcon(playPauseIcon)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentTitle(title)
             .setContentText(artist)
             .setLargeIcon(artwork)
             .setOngoing(isPlaying)
+            .setSilent(true)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setStyle(androidx.media.app.NotificationCompat.MediaStyle()
                 .setMediaSession(session.sessionToken)
                 .setShowActionsInCompactView(0, 1, 2))
-            .addAction(NotificationCompat.Action(android.R.drawable.ic_media_previous, "Anterior", null))
-            .addAction(NotificationCompat.Action(playPauseIcon, if (isPlaying) "Pausar" else "Reproducir", null))
-            .addAction(NotificationCompat.Action(android.R.drawable.ic_media_next, "Siguiente", null))
+            .addAction(NotificationCompat.Action(android.R.drawable.ic_media_previous, "Anterior", prevIntent))
+            .addAction(NotificationCompat.Action(playPauseIcon, if (isPlaying) "Pausa" else "Play", playPauseIntent))
+            .addAction(NotificationCompat.Action(android.R.drawable.ic_media_next, "Siguiente", nextIntent))
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
+        
         manager.notify(1, notification)
     }
 
     override fun onInit(status: Int) {
         if (status == TextToSpeech.SUCCESS) {
             tts?.language = Locale.getDefault()
+            // Notificar al WebView que las voces están listas
+            lifecycleScope.launch(Dispatchers.Main) {
+                currentWebView?.evaluateJavascript("""
+                    (function() {
+                        if (window.speechSynthesis && typeof window.speechSynthesis.onvoiceschanged !== 'undefined') {
+                            window.speechSynthesis.onvoiceschanged();
+                        }
+                        window.dispatchEvent(new Event('voiceschanged'));
+                    })();
+                """.trimIndent(), null)
+            }
         }
+    }
+
+    private fun getAvailableVoicesJson(): String {
+        val voicesArray = JSONArray()
+        try {
+            tts?.voices?.forEach { voice ->
+                val voiceObj = JSONObject().apply {
+                    put("name", voice.name)
+                    put("lang", voice.locale.toLanguageTag())
+                    put("default", voice.locale == Locale.getDefault())
+                }
+                voicesArray.put(voiceObj)
+            }
+        } catch (e: Exception) { e.printStackTrace() }
+        return voicesArray.toString()
     }
 
     private fun speak(text: String) {
         when {
             text.startsWith("__MEDIA_PLAY__") -> {
                 val data = text.removePrefix("__MEDIA_PLAY__").split("|")
-                updateMediaStatus(data.getOrElse(0) { "Ember" }, data.getOrNull(1), true)
+                updateMediaStatus(data.getOrElse(0) { "" }, data.getOrNull(1), true)
             }
             text.startsWith("__MEDIA_PAUSE__") -> {
                 val data = text.removePrefix("__MEDIA_PAUSE__").split("|")
-                updateMediaStatus(data.getOrElse(0) { "Ember" }, data.getOrNull(1), false)
+                updateMediaStatus(data.getOrElse(0) { "" }, data.getOrNull(1), false)
             }
             text.startsWith("__MEDIA_ARTWORK__") -> {
                 fetchArtwork(text.removePrefix("__MEDIA_ARTWORK__"))
@@ -234,11 +296,18 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                 updatePlaybackState()
                 updateMetadata()
             }
+            text.startsWith("__TTS_SPEAK__") -> {
+                val speech = text.removePrefix("__TTS_SPEAK__")
+                tts?.speak(speech, TextToSpeech.QUEUE_FLUSH, null, "ember_tts")
+            }
+            text.startsWith("__TTS_CANCEL__") -> tts?.stop()
+            text.startsWith("__TTS_PAUSE__") -> tts?.stop()
             else -> tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, null)
         }
     }
 
     private fun fetchArtwork(url: String) {
+        if (url.isBlank()) return
         lifecycleScope.launch(Dispatchers.IO) {
             try {
                 val bitmap = BitmapFactory.decodeStream(URL(url).openStream())
