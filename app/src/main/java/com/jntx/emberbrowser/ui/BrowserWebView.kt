@@ -2,7 +2,9 @@ package com.jntx.emberbrowser.ui
 
 import android.annotation.SuppressLint
 import android.graphics.Bitmap
+import android.view.View
 import android.webkit.*
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -34,30 +36,52 @@ fun BrowserWebViewContainer(
     isPcMode: Boolean
 ) {
     val pullToRefreshState = rememberPullToRefreshState()
-    
-    PullToRefreshBox(
-        isRefreshing = isRefreshing,
-        onRefresh = onRefresh,
-        state = pullToRefreshState,
-        modifier = Modifier.fillMaxSize()
-    ) {
-        BrowserWebView(
-            url = url,
-            onPageFinished = onPageFinished,
-            onDownloadRequested = onDownloadRequested,
-            onWebViewCreated = onWebViewCreated,
-            onSpeak = onSpeak,
-            onGetVoices = onGetVoices,
-            onProgressChanged = onProgressChanged,
-            onFaviconChanged = onFaviconChanged,
-            onPermissionRequested = onPermissionRequested,
-            onGeolocationRequested = onGeolocationRequested,
-            onImageLongClick = onImageLongClick,
-            enhancedProtection = enhancedProtection,
-            onMediaStatus = onMediaStatus,
-            isAdBlockerEnabled = isAdBlockerEnabled,
-            isPcMode = isPcMode
+    var customView by remember { mutableStateOf<View?>(null) }
+    var customViewCallback by remember { mutableStateOf<WebChromeClient.CustomViewCallback?>(null) }
+
+    if (customView != null) {
+        BackHandler {
+            customViewCallback?.onCustomViewHidden()
+            customView = null
+            customViewCallback = null
+        }
+        AndroidView(
+            factory = { customView!! },
+            modifier = Modifier.fillMaxSize()
         )
+    } else {
+        PullToRefreshBox(
+            isRefreshing = isRefreshing,
+            onRefresh = onRefresh,
+            state = pullToRefreshState,
+            modifier = Modifier.fillMaxSize()
+        ) {
+            BrowserWebView(
+                url = url,
+                onPageFinished = onPageFinished,
+                onDownloadRequested = onDownloadRequested,
+                onWebViewCreated = onWebViewCreated,
+                onSpeak = onSpeak,
+                onGetVoices = onGetVoices,
+                onProgressChanged = onProgressChanged,
+                onFaviconChanged = onFaviconChanged,
+                onPermissionRequested = onPermissionRequested,
+                onGeolocationRequested = onGeolocationRequested,
+                onImageLongClick = onImageLongClick,
+                enhancedProtection = enhancedProtection,
+                onMediaStatus = onMediaStatus,
+                isAdBlockerEnabled = isAdBlockerEnabled,
+                isPcMode = isPcMode,
+                onShowCustomView = { view, callback ->
+                    customView = view
+                    customViewCallback = callback
+                },
+                onHideCustomView = {
+                    customView = null
+                    customViewCallback = null
+                }
+            )
+        }
     }
 }
 
@@ -78,10 +102,12 @@ fun BrowserWebView(
     enhancedProtection: Boolean,
     onMediaStatus: (String, String?, Boolean) -> Unit,
     isAdBlockerEnabled: Boolean,
-    isPcMode: Boolean
+    isPcMode: Boolean,
+    onShowCustomView: (View, WebChromeClient.CustomViewCallback) -> Unit,
+    onHideCustomView: () -> Unit
 ) {
-    val androidUA = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
-    val desktopUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    val androidUA = "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36"
+    val desktopUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 
     AndroidView(
         factory = { context ->
@@ -89,16 +115,25 @@ fun BrowserWebView(
                 settings.apply {
                     javaScriptEnabled = true
                     domStorageEnabled = true
+                    databaseEnabled = true
                     mediaPlaybackRequiresUserGesture = false
                     javaScriptCanOpenWindowsAutomatically = true
                     allowFileAccess = true
                     cacheMode = WebSettings.LOAD_DEFAULT
                     mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                     
-                    // PC Mode settings
+                    // Zoom inteligente global
+                    useWideViewPort = true
+                    loadWithOverviewMode = true
+                    setSupportZoom(true)
+                    builtInZoomControls = true
+                    displayZoomControls = false
+                    textZoom = 100
+                    
+                    setInitialScale(0) 
+                    layoutAlgorithm = WebSettings.LayoutAlgorithm.TEXT_AUTOSIZING
+                    
                     userAgentString = if (isPcMode) desktopUA else androidUA
-                    useWideViewPort = isPcMode
-                    loadWithOverviewMode = isPcMode
                 }
                 
                 CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
@@ -134,7 +169,17 @@ fun BrowserWebView(
                             
                             view?.evaluateJavascript("""
                                 (function() {
-                                    // Mejorar Media Session y control de reproducción
+                                    var viewport = document.querySelector('meta[name="viewport"]');
+                                    var content = 'width=device-width, initial-scale=1.0, maximum-scale=10.0, user-scalable=yes';
+                                    if (viewport) {
+                                        viewport.content = content;
+                                    } else {
+                                        var meta = document.createElement('meta');
+                                        meta.name = 'viewport';
+                                        meta.content = content;
+                                        document.getElementsByTagName('head')[0].appendChild(meta);
+                                    }
+
                                     var media = document.querySelector('video') || document.querySelector('audio');
                                     if (media) {
                                         var updateMedia = function() {
@@ -174,14 +219,19 @@ fun BrowserWebView(
                                         setInterval(function() { if (!media.paused) updateMedia(); }, 10000);
                                     }
 
-                                    // Puente de Voz (Speech Synthesis API)
                                     if (window.EmberTTS) {
                                         const ttsBridge = {
                                             speak: function(utterance) {
                                                 if (utterance && utterance.text) {
-                                                    EmberTTS.speak("__TTS_SPEAK__" + utterance.text);
+                                                    const payload = {
+                                                        text: utterance.text,
+                                                        lang: utterance.lang,
+                                                        pitch: utterance.pitch || 1.0,
+                                                        rate: utterance.rate || 1.0,
+                                                        voice: utterance.voice ? utterance.voice.name : ""
+                                                    };
+                                                    EmberTTS.speak("__TTS_SPEAK_JSON__" + JSON.stringify(payload));
                                                     if (utterance.onstart) utterance.onstart();
-                                                    // Simular finalización basada en longitud del texto
                                                     setTimeout(() => { if (utterance.onend) utterance.onend(); }, utterance.text.length * 80);
                                                 }
                                             },
@@ -217,7 +267,6 @@ fun BrowserWebView(
                                                 };
                                             }
                                             
-                                            // Disparar evento de voces cargadas
                                             if (window.speechSynthesis.onvoiceschanged) {
                                                 window.speechSynthesis.onvoiceschanged();
                                             }
@@ -240,6 +289,14 @@ fun BrowserWebView(
                     override fun onGeolocationPermissionsShowPrompt(origin: String, callback: GeolocationPermissions.Callback) {
                         onGeolocationRequested(origin, callback)
                     }
+                    override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
+                        if (view != null && callback != null) {
+                            onShowCustomView(view, callback)
+                        }
+                    }
+                    override fun onHideCustomView() {
+                        onHideCustomView()
+                    }
                 }
                 onWebViewCreated(this)
                 loadUrl(url)
@@ -247,9 +304,6 @@ fun BrowserWebView(
         },
         update = { webView -> 
             webView.settings.userAgentString = if (isPcMode) desktopUA else androidUA
-            webView.settings.useWideViewPort = isPcMode
-            webView.settings.loadWithOverviewMode = isPcMode
-
             if (webView.url != url && url != "home") {
                 webView.loadUrl(url) 
             }
