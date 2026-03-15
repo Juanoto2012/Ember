@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Environment
 import android.webkit.CookieManager
+import android.webkit.GeolocationPermissions
 import android.webkit.PermissionRequest
 import android.webkit.WebStorage
 import android.webkit.WebView
@@ -68,6 +69,8 @@ fun BrowserApp(
     var tabs by remember { mutableStateOf(listOf(TabItem())) }
     var selectedTabIndex by remember { mutableIntStateOf(0) }
     var showTabManager by remember { mutableStateOf(false) }
+    
+    // Estados para Screens independientes
     var currentScreen by remember { mutableStateOf<BrowserScreen>(BrowserScreen.Browser) }
     var showMenu by remember { mutableStateOf(false) }
     
@@ -80,10 +83,12 @@ fun BrowserApp(
     var enhancedProtection by remember { mutableStateOf(sharedPrefs.getBoolean("enhanced_protection", true)) }
     var searchEngine by remember { mutableStateOf(sharedPrefs.getString("search_engine", "Google") ?: "Google") }
     var isAdBlockerEnabled by remember { mutableStateOf(sharedPrefs.getBoolean("ad_blocker_enabled", true)) }
+    var isPcMode by remember { mutableStateOf(false) }
     
     var downloadUrl by remember { mutableStateOf("") }
     var showDownloadDialog by remember { mutableStateOf(false) }
     var permissionRequest by remember { mutableStateOf<Pair<PermissionRequest, String>?>(null) }
+    var geolocationRequest by remember { mutableStateOf<Pair<String, GeolocationPermissions.Callback>?>(null) }
     var contextMenuInfo by remember { mutableStateOf<Pair<String, String>?>(null) } 
     var showSecurityInfo by remember { mutableStateOf(false) }
     
@@ -143,13 +148,16 @@ fun BrowserApp(
         showAddressSuggestions = false
     }
 
-    BackHandler(enabled = currentScreen != BrowserScreen.Browser || showTabManager || permissionRequest != null || contextMenuInfo != null || showSecurityInfo || showMenu) {
+    BackHandler(enabled = currentScreen != BrowserScreen.Browser || showTabManager || permissionRequest != null || geolocationRequest != null || contextMenuInfo != null || showSecurityInfo || showMenu || (webView?.canGoBack() == true)) {
         when {
             showMenu -> showMenu = false
             showTabManager -> showTabManager = false
             showSecurityInfo -> showSecurityInfo = false
+            permissionRequest != null -> { permissionRequest?.first?.deny(); permissionRequest = null }
+            geolocationRequest != null -> { geolocationRequest?.second?.invoke(geolocationRequest?.first, false, false); geolocationRequest = null }
+            contextMenuInfo != null -> contextMenuInfo = null
             currentScreen != BrowserScreen.Browser -> currentScreen = BrowserScreen.Browser
-            else -> { /* Handled internally */ }
+            webView?.canGoBack() == true -> webView?.goBack()
         }
     }
 
@@ -281,10 +289,12 @@ fun BrowserApp(
                                 onRefresh = { webView?.reload() },
                                 onFaviconChanged = { bitmap -> tabs = tabs.toMutableList().apply { this[selectedTabIndex] = this[selectedTabIndex].copy(favicon = bitmap) } },
                                 onPermissionRequested = { request, url -> permissionRequest = request to url },
+                                onGeolocationRequested = { origin, callback -> geolocationRequest = origin to callback },
                                 onImageLongClick = { url -> contextMenuInfo = "Imagen" to url },
                                 enhancedProtection = enhancedProtection,
                                 onMediaStatus = onMediaStatus,
-                                isAdBlockerEnabled = isAdBlockerEnabled
+                                isAdBlockerEnabled = isAdBlockerEnabled,
+                                isPcMode = isPcMode
                             )
                         }
                     }
@@ -330,7 +340,9 @@ fun BrowserApp(
                 onHistory = { currentScreen = BrowserScreen.History; showMenu = false },
                 onDownloads = { currentScreen = BrowserScreen.Downloads; showMenu = false },
                 onBookmarks = { currentScreen = BrowserScreen.Bookmarks; showMenu = false },
-                onOpenSettings = { currentScreen = BrowserScreen.Settings; showMenu = false }
+                onOpenSettings = { currentScreen = BrowserScreen.Settings; showMenu = false },
+                isPcMode = isPcMode,
+                onPcModeChange = { isPcMode = it; webView?.reload(); showMenu = false }
             )
         }
 
@@ -345,6 +357,26 @@ fun BrowserApp(
 
         if (showDownloadDialog) {
             DownloadConfirmDialog(url = downloadUrl, defaultPath = downloadPath, onConfirm = { fileName, path -> startDownload(context, downloadUrl, fileName, path, database); showDownloadDialog = false }, onDismiss = { showDownloadDialog = false })
+        }
+
+        permissionRequest?.let { (request, origin) ->
+            AlertDialog(
+                onDismissRequest = { request.deny(); permissionRequest = null },
+                title = { Text("Permiso solicitado") },
+                text = { Text("El sitio $origin solicita acceso a: ${request.resources.joinToString(", ")}") },
+                confirmButton = { Button(onClick = { request.grant(request.resources); permissionRequest = null }) { Text("Permitir") } },
+                dismissButton = { TextButton(onClick = { request.deny(); permissionRequest = null }) { Text("Denegar") } }
+            )
+        }
+
+        geolocationRequest?.let { (origin, callback) ->
+            AlertDialog(
+                onDismissRequest = { callback.invoke(origin, false, false); geolocationRequest = null },
+                title = { Text("Ubicación") },
+                text = { Text("¿Permitir que $origin acceda a tu ubicación?") },
+                confirmButton = { Button(onClick = { callback.invoke(origin, true, true); geolocationRequest = null }) { Text("Permitir") } },
+                dismissButton = { TextButton(onClick = { callback.invoke(origin, false, false); geolocationRequest = null }) { Text("Denegar") } }
+            )
         }
 
         contextMenuInfo?.let { (label, url) ->

@@ -25,10 +25,12 @@ fun BrowserWebViewContainer(
     onRefresh: () -> Unit,
     onFaviconChanged: (Bitmap?) -> Unit,
     onPermissionRequested: (PermissionRequest, String) -> Unit,
+    onGeolocationRequested: (String, GeolocationPermissions.Callback) -> Unit,
     onImageLongClick: (String) -> Unit,
     enhancedProtection: Boolean,
     onMediaStatus: (String, String?, Boolean) -> Unit,
-    isAdBlockerEnabled: Boolean
+    isAdBlockerEnabled: Boolean,
+    isPcMode: Boolean
 ) {
     val pullToRefreshState = rememberPullToRefreshState()
     
@@ -47,10 +49,12 @@ fun BrowserWebViewContainer(
             onProgressChanged = onProgressChanged,
             onFaviconChanged = onFaviconChanged,
             onPermissionRequested = onPermissionRequested,
+            onGeolocationRequested = onGeolocationRequested,
             onImageLongClick = onImageLongClick,
             enhancedProtection = enhancedProtection,
             onMediaStatus = onMediaStatus,
-            isAdBlockerEnabled = isAdBlockerEnabled
+            isAdBlockerEnabled = isAdBlockerEnabled,
+            isPcMode = isPcMode
         )
     }
 }
@@ -66,21 +70,32 @@ fun BrowserWebView(
     onProgressChanged: (Int) -> Unit,
     onFaviconChanged: (Bitmap?) -> Unit,
     onPermissionRequested: (PermissionRequest, String) -> Unit,
+    onGeolocationRequested: (String, GeolocationPermissions.Callback) -> Unit,
     onImageLongClick: (String) -> Unit,
     enhancedProtection: Boolean,
     onMediaStatus: (String, String?, Boolean) -> Unit,
-    isAdBlockerEnabled: Boolean
+    isAdBlockerEnabled: Boolean,
+    isPcMode: Boolean
 ) {
+    val androidUA = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+    val desktopUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
     AndroidView(
         factory = { context ->
             WebView(context).apply {
                 settings.apply {
-                    javaScriptEnabled = true; domStorageEnabled = true
+                    javaScriptEnabled = true
+                    domStorageEnabled = true
                     mediaPlaybackRequiresUserGesture = false
-                    javaScriptCanOpenWindowsAutomatically = true; allowFileAccess = true
+                    javaScriptCanOpenWindowsAutomatically = true
+                    allowFileAccess = true
                     cacheMode = WebSettings.LOAD_DEFAULT
                     mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                    userAgentString = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+                    
+                    // PC Mode settings
+                    userAgentString = if (isPcMode) desktopUA else androidUA
+                    useWideViewPort = isPcMode
+                    loadWithOverviewMode = isPcMode
                 }
                 
                 CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
@@ -165,12 +180,19 @@ fun BrowserWebView(
                     override fun onPermissionRequest(request: PermissionRequest) { onPermissionRequested(request, url) }
                     override fun onProgressChanged(view: WebView?, newProgress: Int) { onProgressChanged(newProgress) }
                     override fun onReceivedIcon(view: WebView?, icon: Bitmap?) { onFaviconChanged(icon) }
+                    override fun onGeolocationPermissionsShowPrompt(origin: String, callback: GeolocationPermissions.Callback) {
+                        onGeolocationRequested(origin, callback)
+                    }
                 }
                 onWebViewCreated(this)
                 loadUrl(url)
             }
         },
         update = { webView -> 
+            webView.settings.userAgentString = if (isPcMode) desktopUA else androidUA
+            webView.settings.useWideViewPort = isPcMode
+            webView.settings.loadWithOverviewMode = isPcMode
+
             if (webView.url != url && url != "home") {
                 webView.loadUrl(url) 
             }

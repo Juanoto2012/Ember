@@ -12,6 +12,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -23,7 +24,9 @@ fun SettingsMenu(
     onHistory: () -> Unit,
     onDownloads: () -> Unit,
     onBookmarks: () -> Unit,
-    onOpenSettings: () -> Unit
+    onOpenSettings: () -> Unit,
+    isPcMode: Boolean,
+    onPcModeChange: (Boolean) -> Unit
 ) {
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -51,11 +54,29 @@ fun SettingsMenu(
             ) {
                 MenuActionItem(Icons.Default.History, "Historial", onHistory)
                 MenuActionItem(Icons.Default.FileDownload, "Descargas", onDownloads)
-                MenuActionItem(Icons.Default.Bookmarks, "Marcadores", onBookmarks)
+                MenuActionItem(Icons.Default.Bookmark, "Favoritos", onBookmarks)
                 MenuActionItem(Icons.Default.Settings, "Ajustes", onOpenSettings)
             }
-            
+
             Spacer(modifier = Modifier.height(24.dp))
+
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                ListItem(
+                    headlineContent = { Text("Modo PC", fontWeight = FontWeight.Bold) },
+                    supportingContent = { Text("Sitio de escritorio") },
+                    leadingContent = { Icon(Icons.Default.Computer, null, tint = MaterialTheme.colorScheme.primary) },
+                    trailingContent = {
+                        Switch(checked = isPcMode, onCheckedChange = onPcModeChange)
+                    },
+                    colors = ListItemDefaults.colors(containerColor = Color.Transparent)
+                )
+            }
+            
+            Spacer(modifier = Modifier.height(16.dp))
             HorizontalDivider()
             
             ListItem(
