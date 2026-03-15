@@ -9,6 +9,7 @@ import android.graphics.BitmapFactory
 import android.os.Build
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
+import android.speech.tts.Voice
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
@@ -77,7 +78,6 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         mediaSession = MediaSessionCompat(this, "EmberMediaSession").apply {
             setFlags(MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS or MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS)
             
-            // PendingIntent para MediaButtonReceiver (obligatorio para el sistema)
             val mediaButtonIntent = Intent(Intent.ACTION_MEDIA_BUTTON)
             mediaButtonIntent.setClass(this@MainActivity, MediaButtonReceiver::class.java)
             val pendingIntent = PendingIntent.getBroadcast(this@MainActivity, 0, mediaButtonIntent, PendingIntent.FLAG_IMMUTABLE)
@@ -219,7 +219,6 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         
         val playPauseIcon = if (isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play
         
-        // Usar intents explícitos hacia nuestro propio MediaControlReceiver
         val prevIntent = PendingIntent.getBroadcast(this, 10, Intent(this, MediaControlReceiver::class.java).apply { action = "ACTION_PREVIOUS" }, PendingIntent.FLAG_IMMUTABLE)
         val playPauseIntent = PendingIntent.getBroadcast(this, 11, Intent(this, MediaControlReceiver::class.java).apply { action = "ACTION_PLAY_PAUSE" }, PendingIntent.FLAG_IMMUTABLE)
         val nextIntent = PendingIntent.getBroadcast(this, 12, Intent(this, MediaControlReceiver::class.java).apply { action = "ACTION_NEXT" }, PendingIntent.FLAG_IMMUTABLE)
@@ -247,7 +246,6 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     override fun onInit(status: Int) {
         if (status == TextToSpeech.SUCCESS) {
             tts?.language = Locale.getDefault()
-            // Notificar al WebView que las voces están listas
             lifecycleScope.launch(Dispatchers.Main) {
                 currentWebView?.evaluateJavascript("""
                     (function() {
@@ -268,6 +266,8 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                 val voiceObj = JSONObject().apply {
                     put("name", voice.name)
                     put("lang", voice.locale.toLanguageTag())
+                    put("voiceURI", voice.name)
+                    put("localService", true)
                     put("default", voice.locale == Locale.getDefault())
                 }
                 voicesArray.put(voiceObj)
@@ -276,33 +276,47 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         return voicesArray.toString()
     }
 
-    private fun speak(text: String) {
+    private fun speak(data: String) {
         when {
-            text.startsWith("__MEDIA_PLAY__") -> {
-                val data = text.removePrefix("__MEDIA_PLAY__").split("|")
-                updateMediaStatus(data.getOrElse(0) { "" }, data.getOrNull(1), true)
+            data.startsWith("__MEDIA_PLAY__") -> {
+                val splitData = data.removePrefix("__MEDIA_PLAY__").split("|")
+                updateMediaStatus(splitData.getOrElse(0) { "" }, splitData.getOrNull(1), true)
             }
-            text.startsWith("__MEDIA_PAUSE__") -> {
-                val data = text.removePrefix("__MEDIA_PAUSE__").split("|")
-                updateMediaStatus(data.getOrElse(0) { "" }, data.getOrNull(1), false)
+            data.startsWith("__MEDIA_PAUSE__") -> {
+                val splitData = data.removePrefix("__MEDIA_PAUSE__").split("|")
+                updateMediaStatus(splitData.getOrElse(0) { "" }, splitData.getOrNull(1), false)
             }
-            text.startsWith("__MEDIA_ARTWORK__") -> {
-                fetchArtwork(text.removePrefix("__MEDIA_ARTWORK__"))
+            data.startsWith("__MEDIA_ARTWORK__") -> {
+                fetchArtwork(data.removePrefix("__MEDIA_ARTWORK__"))
             }
-            text.startsWith("__MEDIA_PROGRESS__") -> {
-                val data = text.removePrefix("__MEDIA_PROGRESS__").split("|")
-                currentPosition = data.getOrNull(0)?.toDoubleOrNull()?.toLong() ?: currentPosition
-                currentDuration = data.getOrNull(1)?.toDoubleOrNull()?.toLong() ?: currentDuration
+            data.startsWith("__MEDIA_PROGRESS__") -> {
+                val splitData = data.removePrefix("__MEDIA_PROGRESS__").split("|")
+                currentPosition = splitData.getOrNull(0)?.toDoubleOrNull()?.toLong() ?: currentPosition
+                currentDuration = splitData.getOrNull(1)?.toDoubleOrNull()?.toLong() ?: currentDuration
                 updatePlaybackState()
                 updateMetadata()
             }
-            text.startsWith("__TTS_SPEAK__") -> {
-                val speech = text.removePrefix("__TTS_SPEAK__")
-                tts?.speak(speech, TextToSpeech.QUEUE_FLUSH, null, "ember_tts")
+            data.startsWith("__TTS_SPEAK_JSON__") -> {
+                try {
+                    val json = JSONObject(data.removePrefix("__TTS_SPEAK_JSON__"))
+                    val text = json.getString("text")
+                    val rate = json.optDouble("rate", 1.0).toFloat()
+                    val pitch = json.optDouble("pitch", 1.0).toFloat()
+                    val voiceName = json.optString("voice")
+
+                    tts?.apply {
+                        setSpeechRate(rate)
+                        setPitch(pitch)
+                        if (voiceName.isNotEmpty()) {
+                            voices?.find { it.name == voiceName }?.let { voice = it }
+                        }
+                        speak(text, TextToSpeech.QUEUE_FLUSH, null, "ember_tts_id")
+                    }
+                } catch (e: Exception) { e.printStackTrace() }
             }
-            text.startsWith("__TTS_CANCEL__") -> tts?.stop()
-            text.startsWith("__TTS_PAUSE__") -> tts?.stop()
-            else -> tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, null)
+            data.startsWith("__TTS_CANCEL__") -> tts?.stop()
+            data.startsWith("__TTS_PAUSE__") -> tts?.stop()
+            else -> tts?.speak(data, TextToSpeech.QUEUE_FLUSH, null, null)
         }
     }
 
