@@ -1,0 +1,1 @@
+Modern, fast, and secure Android web browser built with Jetpack Compose.
