@@ -47,3 +47,7 @@ data class MediaInfo(
     val artwork: Bitmap? = null,
     val isPlaying: Boolean = false
 )
+
+enum class UserAgentMode {
+    ANDROID, PC, IOS, TABLET, ANDROID_14
+}

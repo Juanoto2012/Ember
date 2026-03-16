@@ -86,7 +86,8 @@ fun BrowserApp(
     var enhancedProtection by remember { mutableStateOf(sharedPrefs.getBoolean("enhanced_protection", true)) }
     var searchEngine by remember { mutableStateOf(sharedPrefs.getString("search_engine", "Google") ?: "Google") }
     var isAdBlockerEnabled by remember { mutableStateOf(sharedPrefs.getBoolean("ad_blocker_enabled", true)) }
-    var isPcMode by remember { mutableStateOf(false) }
+    var userAgentMode by remember { mutableStateOf(UserAgentMode.ANDROID) }
+    var textZoom by remember { mutableIntStateOf(sharedPrefs.getInt("text_zoom", 100)) }
     
     var downloadUrl by remember { mutableStateOf("") }
     var showDownloadDialog by remember { mutableStateOf(false) }
@@ -238,7 +239,6 @@ fun BrowserApp(
                                                     onDismissRequest = { showMenu = false },
                                                     modifier = Modifier.width(220.dp)
                                                 ) {
-                                                    // Navigation shortcuts at the top of the menu
                                                     Row(
                                                         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
                                                         horizontalArrangement = Arrangement.SpaceEvenly
@@ -278,12 +278,25 @@ fun BrowserApp(
                                                         leadingIcon = { Icon(Icons.Default.Bookmark, null) }
                                                     )
                                                     HorizontalDivider()
+                                                    
+                                                    var showUASubMenu by remember { mutableStateOf(false) }
                                                     DropdownMenuItem(
-                                                        text = { Text("Modo PC") },
-                                                        onClick = { isPcMode = !isPcMode; webView?.reload(); showMenu = false },
-                                                        leadingIcon = { Icon(Icons.Default.Computer, null) },
-                                                        trailingIcon = { Checkbox(checked = isPcMode, onCheckedChange = null) }
+                                                        text = { Text("User Agent") },
+                                                        onClick = { showUASubMenu = !showUASubMenu },
+                                                        leadingIcon = { Icon(Icons.Default.AccountCircle, null) },
+                                                        trailingIcon = { Icon(if (showUASubMenu) Icons.Default.ArrowDropUp else Icons.Default.ArrowDropDown, null) }
                                                     )
+                                                    if (showUASubMenu) {
+                                                        UserAgentMode.entries.forEach { mode ->
+                                                            DropdownMenuItem(
+                                                                text = { Text(mode.name, fontSize = 12.sp) },
+                                                                onClick = { userAgentMode = mode; webView?.reload(); showMenu = false; showUASubMenu = false },
+                                                                modifier = Modifier.padding(start = 16.dp),
+                                                                trailingIcon = { if (userAgentMode == mode) Icon(Icons.Default.Check, null, modifier = Modifier.size(16.dp)) }
+                                                            )
+                                                        }
+                                                    }
+
                                                     DropdownMenuItem(
                                                         text = { Text("Configuración") },
                                                         onClick = { currentScreen = BrowserScreen.Settings; showMenu = false },
@@ -373,7 +386,8 @@ fun BrowserApp(
                                 enhancedProtection = enhancedProtection,
                                 onMediaStatus = onMediaStatus,
                                 isAdBlockerEnabled = isAdBlockerEnabled,
-                                isPcMode = isPcMode
+                                userAgentMode = userAgentMode,
+                                textZoom = textZoom
                             )
                         }
                     }
@@ -404,7 +418,9 @@ fun BrowserApp(
                     onDownloadPathChange = { downloadPath = it; sharedPrefs.edit { putString("download_path", it) } },
                     onReadPage = { webView?.evaluateJavascript("(function() { return document.body.innerText; })();") { text -> onSpeak(text ?: "No se pudo leer el contenido") } },
                     isAdBlockerEnabled = isAdBlockerEnabled,
-                    onAdBlockerChange = { isAdBlockerEnabled = it; sharedPrefs.edit { putBoolean("ad_blocker_enabled", it) } }
+                    onAdBlockerChange = { isAdBlockerEnabled = it; sharedPrefs.edit { putBoolean("ad_blocker_enabled", it) } },
+                    textZoom = textZoom,
+                    onTextZoomChange = { textZoom = it; sharedPrefs.edit { putInt("text_zoom", it) } }
                 )
             }
         }

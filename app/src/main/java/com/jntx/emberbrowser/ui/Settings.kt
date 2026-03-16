@@ -9,10 +9,11 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 
 @Composable
 fun SettingsScreen(
@@ -27,7 +28,9 @@ fun SettingsScreen(
     onDownloadPathChange: (String) -> Unit,
     onReadPage: () -> Unit,
     isAdBlockerEnabled: Boolean,
-    onAdBlockerChange: (Boolean) -> Unit
+    onAdBlockerChange: (Boolean) -> Unit,
+    textZoom: Int,
+    onTextZoomChange: (Int) -> Unit
 ) {
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Column(modifier = Modifier.padding(16.dp).verticalScroll(rememberScrollState())) {
@@ -54,6 +57,19 @@ fun SettingsScreen(
                 supportingContent = { Text("Block annoying ads and trackers") },
                 trailingContent = { Switch(checked = isAdBlockerEnabled, onCheckedChange = onAdBlockerChange) }
             )
+
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            Text("Accessibility", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+            
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                Text("Text Zoom: $textZoom%", style = MaterialTheme.typography.bodyMedium)
+                Slider(
+                    value = textZoom.toFloat(),
+                    onValueChange = { onTextZoomChange(it.toInt()) },
+                    valueRange = 50f..200f,
+                    steps = 15
+                )
+            }
 
             ListItem(
                 headlineContent = { Text("Read Current Page") },
