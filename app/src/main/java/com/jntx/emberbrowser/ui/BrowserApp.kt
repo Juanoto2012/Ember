@@ -1,8 +1,10 @@
 package com.jntx.emberbrowser.ui
 
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.os.Environment
+import android.print.PrintManager
 import android.webkit.CookieManager
 import android.webkit.GeolocationPermissions
 import android.webkit.PermissionRequest
@@ -365,7 +367,18 @@ fun BrowserApp(
                 onBookmarks = { currentScreen = BrowserScreen.Bookmarks; showMenu = false },
                 onOpenSettings = { currentScreen = BrowserScreen.Settings; showMenu = false },
                 isPcMode = isPcMode,
-                onPcModeChange = { isPcMode = it; webView?.reload(); showMenu = false }
+                onPcModeChange = { isPcMode = it; webView?.reload(); showMenu = false },
+                currentUrl = currentTab.url,
+                onFindInPage = { /* Próximamente */ },
+                onPrint = { 
+                    webView?.let { view ->
+                        (context as? Activity)?.let { activity ->
+                            val printManager = activity.getSystemService(Context.PRINT_SERVICE) as PrintManager
+                            val printAdapter = view.createPrintDocumentAdapter("Ember Document")
+                            printManager.print("Ember Print", printAdapter, null)
+                        }
+                    }
+                }
             )
         }
 

@@ -1,5 +1,7 @@
 package com.jntx.emberbrowser.ui
 
+import android.content.Intent
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -11,13 +13,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -31,8 +34,23 @@ fun SettingsMenu(
     onBookmarks: () -> Unit,
     onOpenSettings: () -> Unit,
     isPcMode: Boolean,
-    onPcModeChange: (Boolean) -> Unit
+    onPcModeChange: (Boolean) -> Unit,
+    currentUrl: String,
+    onFindInPage: () -> Unit,
+    onPrint: () -> Unit
 ) {
+    val context = LocalContext.current
+    var showAboutDialog by remember { mutableStateOf(false) }
+
+    if (showAboutDialog) {
+        AlertDialog(
+            onDismissRequest = { showAboutDialog = false },
+            title = { Text("Acerca de Ember") },
+            text = { Text("Ember Browser v1.0\nUn navegador rápido, privado y personalizable.") },
+            confirmButton = { TextButton(onClick = { showAboutDialog = false }) { Text("Cerrar") } }
+        )
+    }
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         dragHandle = { BottomSheetDefaults.DragHandle() },
@@ -46,7 +64,6 @@ fun SettingsMenu(
                 .padding(bottom = 40.dp)
                 .navigationBarsPadding()
         ) {
-            // Header con gradiente sutil
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -67,7 +84,6 @@ fun SettingsMenu(
                 }
             }
             
-            // Grid de acciones principales (Estilo Firefox/Moderno)
             LazyVerticalGrid(
                 columns = GridCells.Fixed(4),
                 modifier = Modifier.fillMaxWidth(),
@@ -79,15 +95,25 @@ fun SettingsMenu(
                 item { MenuActionItem(Icons.Default.Bookmark, "Favoritos", onBookmarks) }
                 item { MenuActionItem(Icons.Default.Settings, "Ajustes", onOpenSettings) }
                 
-                item { MenuActionItem(Icons.Default.Share, "Compartir", { /* Implementar */ }) }
-                item { MenuActionItem(Icons.Default.FindInPage, "Buscar", { /* Implementar */ }) }
-                item { MenuActionItem(Icons.Default.Print, "Imprimir", { /* Implementar */ }) }
-                item { MenuActionItem(Icons.Default.Info, "Acerca de", { /* Implementar */ }) }
+                item { 
+                    MenuActionItem(Icons.Default.Share, "Compartir", {
+                        val sendIntent: Intent = Intent().apply {
+                            action = Intent.ACTION_SEND
+                            putExtra(Intent.EXTRA_TEXT, currentUrl)
+                            type = "text/plain"
+                        }
+                        val shareIntent = Intent.createChooser(sendIntent, null)
+                        context.startActivity(shareIntent)
+                        onDismiss()
+                    }) 
+                }
+                item { MenuActionItem(Icons.Default.FindInPage, "Buscar", { onFindInPage(); onDismiss() }) }
+                item { MenuActionItem(Icons.Default.Print, "Imprimir", { onPrint(); onDismiss() }) }
+                item { MenuActionItem(Icons.Default.Info, "Acerca de", { showAboutDialog = true }) }
             }
 
             Spacer(modifier = Modifier.height(28.dp))
 
-            // Secciones de configuración rápida
             Text(
                 text = "Configuración rápida",
                 style = MaterialTheme.typography.labelLarge,
