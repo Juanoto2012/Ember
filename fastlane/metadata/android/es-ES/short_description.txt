@@ -1,1 +1,0 @@
-Navegador web moderno, rápido y seguro para Android, desarrollado con Jetpack Compose.

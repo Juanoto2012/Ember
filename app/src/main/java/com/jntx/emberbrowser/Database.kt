@@ -9,6 +9,9 @@ interface BrowserDao {
     @Query("SELECT * FROM history ORDER BY timestamp DESC")
     fun getAllHistory(): Flow<List<HistoryItem>>
 
+    @Query("SELECT * FROM history WHERE title LIKE :query OR url LIKE :query ORDER BY timestamp DESC")
+    suspend fun searchHistory(query: String): List<HistoryItem>
+
     @Insert
     suspend fun insertHistory(item: HistoryItem)
 
@@ -32,9 +35,12 @@ interface BrowserDao {
 
     @Update
     suspend fun updateDownload(item: DownloadItem)
+
+    @Query("DELETE FROM downloads WHERE id = :id")
+    suspend fun deleteDownload(id: Long)
 }
 
-@Database(entities = [HistoryItem::class, BookmarkItem::class, DownloadItem::class], version = 3)
+@Database(entities = [HistoryItem::class, BookmarkItem::class, DownloadItem::class], version = 4)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun browserDao(): BrowserDao
 

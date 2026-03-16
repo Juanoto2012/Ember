@@ -23,16 +23,15 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
-import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
@@ -40,6 +39,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
@@ -71,7 +71,6 @@ fun BrowserApp(
     var selectedTabIndex by remember { mutableIntStateOf(0) }
     var showTabManager by remember { mutableStateOf(false) }
     
-    // Estados para Screens independientes
     var currentScreen by remember { mutableStateOf<BrowserScreen>(BrowserScreen.Browser) }
     var showMenu by remember { mutableStateOf(false) }
     
@@ -99,7 +98,7 @@ fun BrowserApp(
     var webView: WebView? by remember { mutableStateOf(null) }
     
     var addressBarText by remember { mutableStateOf("") }
-    var addressSuggestions by remember { mutableStateOf(listOf<String>()) }
+    var addressSuggestions by remember { mutableStateOf(listOf<SuggestionItem>()) }
     var showAddressSuggestions by remember { mutableStateOf(false) }
     val client = remember { OkHttpClient() }
     var suggestionJob: Job? by remember { mutableStateOf(null) }
@@ -115,7 +114,7 @@ fun BrowserApp(
         }
     }
 
-    fun fetchAddressSuggestions(query: String) {
+    fun fetchSuggestions(query: String) {
         suggestionJob?.cancel()
         if (query.length < 2) {
             addressSuggestions = emptyList()
@@ -124,7 +123,14 @@ fun BrowserApp(
         }
         
         suggestionJob = scope.launch(Dispatchers.IO) {
-            delay(300)
+            delay(200)
+            val suggestions = mutableListOf<SuggestionItem>()
+            
+            val historyMatches = database.browserDao().searchHistory("%$query%")
+            historyMatches.take(3).forEach {
+                suggestions.add(SuggestionItem(it.title, it.url, SuggestionType.HISTORY))
+            }
+            
             try {
                 val url = "https://search.brave.com/api/suggest?q=$query"
                 val request = Request.Builder().url(url).build()
@@ -132,15 +138,18 @@ fun BrowserApp(
                 val body = response.body?.string() ?: ""
                 val jsonArray = JSONArray(body)
                 val jsonSuggestions = jsonArray.getJSONArray(1)
-                val suggestionList = mutableListOf<String>()
                 for (i in 0 until jsonSuggestions.length()) {
-                    suggestionList.add(jsonSuggestions.getString(i))
-                }
-                withContext(Dispatchers.Main) {
-                    addressSuggestions = suggestionList
-                    showAddressSuggestions = suggestionList.isNotEmpty()
+                    val s = jsonSuggestions.getString(i)
+                    if (suggestions.none { it.title == s || it.url == s }) {
+                        suggestions.add(SuggestionItem(s, getSearchUrl(s), SuggestionType.SEARCH))
+                    }
                 }
             } catch (e: Exception) { e.printStackTrace() }
+            
+            withContext(Dispatchers.Main) {
+                addressSuggestions = suggestions
+                showAddressSuggestions = suggestions.isNotEmpty()
+            }
         }
     }
     
@@ -174,12 +183,12 @@ fun BrowserApp(
                                         title = {
                                             TextField(
                                                 value = addressBarText,
-                                                onValueChange = { addressBarText = it; fetchAddressSuggestions(it) },
+                                                onValueChange = { addressBarText = it; fetchSuggestions(it) },
                                                 modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).height(52.dp),
                                                 shape = RoundedCornerShape(26.dp),
                                                 singleLine = true,
                                                 textStyle = MaterialTheme.typography.bodyMedium,
-                                                placeholder = { Text("Search or type URL", fontSize = 14.sp) },
+                                                placeholder = { Text("Busca o escribe una URL", fontSize = 14.sp) },
                                                 leadingIcon = {
                                                     val isHttps = currentTab.url.startsWith("https")
                                                     Icon(
@@ -225,18 +234,30 @@ fun BrowserApp(
 
                                     if (showAddressSuggestions) {
                                         Popup(onDismissRequest = { showAddressSuggestions = false }, properties = PopupProperties(focusable = false)) {
-                                            Surface(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(bottomStart = 16.dp, bottomEnd = 16.dp), shadowElevation = 8.dp) {
-                                                LazyColumn(modifier = Modifier.heightIn(max = 300.dp)) {
+                                            Surface(
+                                                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).shadow(8.dp),
+                                                color = MaterialTheme.colorScheme.surface,
+                                                shape = RoundedCornerShape(bottomStart = 16.dp, bottomEnd = 16.dp)
+                                            ) {
+                                                LazyColumn(modifier = Modifier.heightIn(max = 400.dp)) {
                                                     items(addressSuggestions) { suggestion ->
                                                         ListItem(
-                                                            headlineContent = { Text(suggestion) },
+                                                            headlineContent = { Text(suggestion.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                                                            supportingContent = { if (suggestion.type == SuggestionType.HISTORY) Text(suggestion.url, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall, color = Color.Gray) },
                                                             modifier = Modifier.clickable {
-                                                                addressBarText = suggestion
-                                                                tabs = tabs.toMutableList().apply { this[selectedTabIndex] = this[selectedTabIndex].copy(url = getSearchUrl(suggestion)) }
+                                                                val finalUrl = if (suggestion.type == SuggestionType.HISTORY) suggestion.url else getSearchUrl(suggestion.title)
+                                                                tabs = tabs.toMutableList().apply { this[selectedTabIndex] = this[selectedTabIndex].copy(url = finalUrl) }
                                                                 focusManager.clearFocus()
                                                                 showAddressSuggestions = false
                                                             },
-                                                            leadingContent = { Icon(Icons.Default.Search, null, tint = Color.Gray, modifier = Modifier.size(18.dp)) }
+                                                            leadingContent = { 
+                                                                Icon(
+                                                                    imageVector = if (suggestion.type == SuggestionType.HISTORY) Icons.Default.History else Icons.Default.Search, 
+                                                                    null, 
+                                                                    tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f), 
+                                                                    modifier = Modifier.size(20.dp)
+                                                                ) 
+                                                            }
                                                         )
                                                     }
                                                 }
@@ -312,7 +333,7 @@ fun BrowserApp(
             }
             BrowserScreen.Downloads -> {
                 val downloadItems by database.browserDao().getAllDownloads().collectAsState(initial = emptyList())
-                DownloadScreen(items = downloadItems, onBack = { currentScreen = BrowserScreen.Browser })
+                DownloadScreen(items = downloadItems, onBack = { currentScreen = BrowserScreen.Browser }, onDelete = { id -> scope.launch { database.browserDao().deleteDownload(id) } })
             }
             BrowserScreen.Settings -> {
                 SettingsScreen(
@@ -387,4 +408,6 @@ fun BrowserApp(
     }
 }
 
+data class SuggestionItem(val title: String, val url: String, val type: SuggestionType)
+enum class SuggestionType { SEARCH, HISTORY }
 enum class BrowserScreen { Browser, History, Bookmarks, Downloads, Settings }

@@ -15,6 +15,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -48,9 +49,7 @@ fun HomeScreen(onSearch: (String) -> Unit, onConfigureHomepage: (String) -> Unit
             ShortcutItem("Facebook", "https://www.facebook.com", Icons.Default.Public),
             ShortcutItem("X", "https://www.x.com", Icons.Default.Language),
             ShortcutItem("GitHub", "https://www.github.com", Icons.Default.Code),
-            ShortcutItem("Reddit", "https://www.reddit.com", Icons.Default.Groups),
-            ShortcutItem("Wikipedia", "https://www.wikipedia.org", Icons.AutoMirrored.Filled.MenuBook),
-            ShortcutItem("Ajustes", "config", Icons.Outlined.Edit)
+            ShortcutItem("Wikipedia", "https://www.wikipedia.org", Icons.AutoMirrored.Filled.MenuBook)
         )
     }
 
@@ -78,9 +77,25 @@ fun HomeScreen(onSearch: (String) -> Unit, onConfigureHomepage: (String) -> Unit
         AlertDialog(
             onDismissRequest = { showConfigDialog = false },
             title = { Text("Configurar Inicio") },
-            text = { OutlinedTextField(value = urlInput, onValueChange = { urlInput = it }, label = { Text("URL") }, shape = RoundedCornerShape(12.dp)) },
-            confirmButton = { Button(onClick = { onConfigureHomepage(urlInput); showConfigDialog = false }) { Text("Guardar") } },
-            dismissButton = { TextButton(onClick = { showConfigDialog = false }) { Text("Cancelar") } }
+            text = { 
+                OutlinedTextField(
+                    value = urlInput, 
+                    onValueChange = { urlInput = it }, 
+                    label = { Text("URL de la página de inicio") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
+                ) 
+            },
+            confirmButton = { 
+                Button(onClick = { onConfigureHomepage(urlInput); showConfigDialog = false }) { 
+                    Text("Guardar") 
+                } 
+            },
+            dismissButton = { 
+                TextButton(onClick = { showConfigDialog = false }) { 
+                    Text("Cancelar") 
+                } 
+            }
         )
     }
 
@@ -89,88 +104,82 @@ fun HomeScreen(onSearch: (String) -> Unit, onConfigureHomepage: (String) -> Unit
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
     ) {
+        // Botón de configuración en la esquina superior derecha
+        IconButton(
+            onClick = { showConfigDialog = true },
+            modifier = Modifier.align(Alignment.TopEnd).padding(16.dp)
+        ) {
+            Icon(Icons.Outlined.Settings, "Configurar inicio", tint = MaterialTheme.colorScheme.primary)
+        }
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 32.dp),
+                .padding(horizontal = 24.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Spacer(Modifier.weight(0.35f))
+            Spacer(Modifier.weight(0.3f))
             
-            // Minimalist Logo - Via Browser style
+            // Logo Ember Plano
+            Icon(
+                imageVector = Icons.Default.Whatshot,
+                contentDescription = "Logo",
+                modifier = Modifier.size(64.dp),
+                tint = MaterialTheme.colorScheme.primary
+            )
+            
             Text(
                 text = "Ember",
-                fontSize = 64.sp,
-                fontWeight = FontWeight.ExtraLight,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
-                letterSpacing = (-2).sp
+                fontSize = 32.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onBackground
             )
             
             Spacer(Modifier.height(40.dp))
 
-            // Search Bar
-            Box(contentAlignment = Alignment.TopCenter) {
-                Column {
-                    Surface(
-                        modifier = Modifier.fillMaxWidth().height(52.dp),
-                        shape = CircleShape,
-                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
-                        border = null
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 16.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Search, 
-                                contentDescription = null, 
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                                modifier = Modifier.size(20.dp)
-                            )
-                            TextField(
-                                value = query,
-                                onValueChange = { query = it },
-                                modifier = Modifier.weight(1f),
-                                placeholder = { Text("Buscar o escribir URL", color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f), fontSize = 15.sp) },
-                                singleLine = true,
-                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                                keyboardActions = KeyboardActions(onSearch = { onSearch(query) }),
-                                colors = TextFieldDefaults.colors(
-                                    focusedContainerColor = Color.Transparent,
-                                    unfocusedContainerColor = Color.Transparent,
-                                    focusedIndicatorColor = Color.Transparent,
-                                    unfocusedIndicatorColor = Color.Transparent,
-                                    cursorColor = MaterialTheme.colorScheme.primary
-                                )
-                            )
-                            if (query.isNotEmpty()) {
-                                IconButton(onClick = { query = "" }, modifier = Modifier.size(24.dp)) {
-                                    Icon(Icons.Default.Close, null, modifier = Modifier.size(16.dp))
-                                }
-                            }
-                        }
-                    }
+            // Barra de búsqueda simple y plana
+            Surface(
+                modifier = Modifier.fillMaxWidth().height(52.dp),
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                border = null
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                ) {
+                    Icon(Icons.Default.Search, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+                    TextField(
+                        value = query,
+                        onValueChange = { query = it },
+                        modifier = Modifier.weight(1f),
+                        placeholder = { Text("Buscar o escribir URL", fontSize = 15.sp) },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                        keyboardActions = KeyboardActions(onSearch = { if(query.isNotEmpty()) onSearch(query) }),
+                        colors = TextFieldDefaults.colors(
+                            focusedContainerColor = Color.Transparent,
+                            unfocusedContainerColor = Color.Transparent,
+                            focusedIndicatorColor = Color.Transparent,
+                            unfocusedIndicatorColor = Color.Transparent
+                        )
+                    )
+                }
+            }
 
-                    AnimatedVisibility(
-                        visible = suggestions.isNotEmpty(),
-                        enter = fadeIn() + expandVertically(),
-                        exit = fadeOut() + shrinkVertically()
-                    ) {
-                        Surface(
-                            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-                            shape = RoundedCornerShape(16.dp),
-                            color = MaterialTheme.colorScheme.surface,
-                            tonalElevation = 4.dp
-                        ) {
-                            Column(modifier = Modifier.padding(vertical = 4.dp)) {
-                                suggestions.take(6).forEach { suggestion ->
-                                    ListItem(
-                                        headlineContent = { Text(suggestion, fontSize = 14.sp) },
-                                        modifier = Modifier.clickable { query = suggestion; onSearch(suggestion) },
-                                        leadingContent = { Icon(Icons.Default.History, null, tint = Color.Gray.copy(alpha = 0.5f), modifier = Modifier.size(14.dp)) }
-                                    )
-                                }
-                            }
+            AnimatedVisibility(visible = suggestions.isNotEmpty()) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    tonalElevation = 2.dp
+                ) {
+                    Column {
+                        suggestions.take(4).forEach { suggestion ->
+                            ListItem(
+                                headlineContent = { Text(suggestion, fontSize = 14.sp) },
+                                modifier = Modifier.clickable { onSearch(suggestion) }
+                            )
                         }
                     }
                 }
@@ -178,55 +187,42 @@ fun HomeScreen(onSearch: (String) -> Unit, onConfigureHomepage: (String) -> Unit
 
             Spacer(Modifier.height(32.dp))
 
-            // Shortcuts Grid
+            // Accesos directos planos
             LazyVerticalGrid(
                 columns = GridCells.Fixed(4),
                 modifier = Modifier.fillMaxWidth(),
-                contentPadding = PaddingValues(bottom = 16.dp)
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 items(shortcuts) { item ->
-                    ShortcutCell(item) {
-                        if (item.url == "config") showConfigDialog = true
-                        else onSearch(item.url)
-                    }
+                    ShortcutItemView(item) { onSearch(item.url) }
                 }
             }
 
-            Spacer(Modifier.weight(0.65f))
+            Spacer(Modifier.weight(0.5f))
         }
     }
 }
 
 @Composable
-fun ShortcutCell(item: ShortcutItem, onClick: () -> Unit) {
+fun ShortcutItemView(item: ShortcutItem, onClick: () -> Unit) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(8.dp))
             .clickable { onClick() }
-            .padding(vertical = 12.dp)
+            .padding(8.dp)
     ) {
-        Box(
-            modifier = Modifier
-                .size(42.dp)
-                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f), CircleShape),
-            contentAlignment = Alignment.Center
+        Surface(
+            modifier = Modifier.size(44.dp),
+            shape = RoundedCornerShape(8.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant
         ) {
-            Icon(
-                imageVector = item.icon,
-                contentDescription = item.name,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                modifier = Modifier.size(20.dp)
-            )
+            Box(contentAlignment = Alignment.Center) {
+                Icon(item.icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+            }
         }
-        Spacer(Modifier.height(6.dp))
-        Text(
-            text = item.name,
-            fontSize = 10.sp,
-            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
-            textAlign = TextAlign.Center,
-            maxLines = 1
-        )
+        Spacer(Modifier.height(4.dp))
+        Text(item.name, fontSize = 10.sp, maxLines = 1, textAlign = TextAlign.Center)
     }
 }
 
