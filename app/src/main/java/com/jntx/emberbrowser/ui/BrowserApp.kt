@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -178,47 +179,119 @@ fun BrowserApp(
             BrowserScreen.Browser -> {
                 Scaffold(
                     topBar = {
-                        if (!showTabManager && currentTab.url != "home") {
-                            Surface(color = MaterialTheme.colorScheme.surface, shadowElevation = 2.dp) {
+                        if (!showTabManager) {
+                            Surface(color = MaterialTheme.colorScheme.surface, shadowElevation = 1.dp) {
                                 Column {
                                     TopAppBar(
                                         title = {
-                                            TextField(
-                                                value = addressBarText,
-                                                onValueChange = { addressBarText = it; fetchSuggestions(it) },
-                                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).height(52.dp),
-                                                shape = RoundedCornerShape(26.dp),
-                                                singleLine = true,
-                                                textStyle = MaterialTheme.typography.bodyMedium,
-                                                placeholder = { Text("Busca o escribe una URL", fontSize = 14.sp) },
-                                                leadingIcon = {
+                                            Surface(
+                                                modifier = Modifier.fillMaxWidth().height(40.dp),
+                                                shape = RoundedCornerShape(20.dp),
+                                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                                            ) {
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    modifier = Modifier.padding(horizontal = 12.dp)
+                                                ) {
                                                     val isHttps = currentTab.url.startsWith("https")
                                                     Icon(
                                                         imageVector = if (isHttps) Icons.Default.Shield else Icons.Default.GppBad,
                                                         contentDescription = "Security",
                                                         tint = if (isHttps) MaterialTheme.colorScheme.primary else Color.Red,
-                                                        modifier = Modifier.size(20.dp).clickable { showSecurityInfo = true }
+                                                        modifier = Modifier.size(16.dp).clickable { showSecurityInfo = true }
                                                     )
-                                                },
-                                                trailingIcon = { if (addressBarText.isNotEmpty()) IconButton(onClick = { addressBarText = "" }) { Icon(Icons.Default.Close, "Clear", modifier = Modifier.size(20.dp)) } },
-                                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Go),
-                                                keyboardActions = KeyboardActions(onGo = {
-                                                    val finalUrl = if (addressBarText.startsWith("http") || addressBarText.startsWith("file://")) addressBarText 
-                                                                  else if (addressBarText.contains(".") && !addressBarText.contains(" ")) "https://$addressBarText"
-                                                                  else getSearchUrl(addressBarText)
-                                                    tabs = tabs.toMutableList().apply { this[selectedTabIndex] = this[selectedTabIndex].copy(url = finalUrl) }
-                                                    focusManager.clearFocus()
-                                                    showAddressSuggestions = false
-                                                }),
-                                                colors = TextFieldDefaults.colors(
-                                                    focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                                                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                                                    focusedIndicatorColor = Color.Transparent,
-                                                    unfocusedIndicatorColor = Color.Transparent
-                                                )
-                                            )
+                                                    Spacer(Modifier.width(8.dp))
+                                                    BasicTextField(
+                                                        value = addressBarText,
+                                                        onValueChange = { addressBarText = it; fetchSuggestions(it) },
+                                                        modifier = Modifier.weight(1f),
+                                                        singleLine = true,
+                                                        textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
+                                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Go),
+                                                        keyboardActions = KeyboardActions(onGo = {
+                                                            val finalUrl = if (addressBarText.startsWith("http") || addressBarText.startsWith("file://")) addressBarText 
+                                                                          else if (addressBarText.contains(".") && !addressBarText.contains(" ")) "https://$addressBarText"
+                                                                          else getSearchUrl(addressBarText)
+                                                            tabs = tabs.toMutableList().apply { this[selectedTabIndex] = this[selectedTabIndex].copy(url = finalUrl) }
+                                                            focusManager.clearFocus()
+                                                            showAddressSuggestions = false
+                                                        })
+                                                    )
+                                                }
+                                            }
                                         },
-                                        actions = { IconButton(onClick = { webView?.reload() }) { Icon(Icons.Default.Refresh, "Reload") } }
+                                        actions = {
+                                            IconButton(onClick = { tabs = tabs + TabItem(); selectedTabIndex = tabs.size - 1 }) {
+                                                Icon(Icons.Default.Add, "New Tab", modifier = Modifier.size(22.dp))
+                                            }
+                                            IconButton(onClick = { showTabManager = true }) {
+                                                Box(modifier = Modifier.size(20.dp).border(1.5.dp, MaterialTheme.colorScheme.onSurface, RoundedCornerShape(4.dp)), contentAlignment = Alignment.Center) {
+                                                    Text(text = tabs.size.toString(), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                                }
+                                            }
+                                            Box {
+                                                IconButton(onClick = { showMenu = true }) {
+                                                    Icon(Icons.Default.MoreVert, "Menu")
+                                                }
+                                                DropdownMenu(
+                                                    expanded = showMenu,
+                                                    onDismissRequest = { showMenu = false },
+                                                    modifier = Modifier.width(220.dp)
+                                                ) {
+                                                    // Navigation shortcuts at the top of the menu
+                                                    Row(
+                                                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                                        horizontalArrangement = Arrangement.SpaceEvenly
+                                                    ) {
+                                                        IconButton(onClick = { webView?.goBack(); showMenu = false }, enabled = webView?.canGoBack() == true) {
+                                                            Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
+                                                        }
+                                                        IconButton(onClick = { webView?.goForward(); showMenu = false }, enabled = webView?.canGoForward() == true) {
+                                                            Icon(Icons.AutoMirrored.Filled.ArrowForward, "Forward")
+                                                        }
+                                                        IconButton(onClick = { webView?.reload(); showMenu = false }) {
+                                                            Icon(Icons.Default.Refresh, "Reload")
+                                                        }
+                                                        IconButton(onClick = { tabs = tabs.toMutableList().apply { this[selectedTabIndex] = this[selectedTabIndex].copy(url = "home") }; showMenu = false }) {
+                                                            Icon(Icons.Default.Home, "Home")
+                                                        }
+                                                    }
+                                                    HorizontalDivider()
+                                                    DropdownMenuItem(
+                                                        text = { Text("Nueva pestaña") },
+                                                        onClick = { tabs = tabs + TabItem(); selectedTabIndex = tabs.size - 1; showMenu = false },
+                                                        leadingIcon = { Icon(Icons.Default.Add, null) }
+                                                    )
+                                                    DropdownMenuItem(
+                                                        text = { Text("Historial") },
+                                                        onClick = { currentScreen = BrowserScreen.History; showMenu = false },
+                                                        leadingIcon = { Icon(Icons.Default.History, null) }
+                                                    )
+                                                    DropdownMenuItem(
+                                                        text = { Text("Descargas") },
+                                                        onClick = { currentScreen = BrowserScreen.Downloads; showMenu = false },
+                                                        leadingIcon = { Icon(Icons.Default.FileDownload, null) }
+                                                    )
+                                                    DropdownMenuItem(
+                                                        text = { Text("Favoritos") },
+                                                        onClick = { currentScreen = BrowserScreen.Bookmarks; showMenu = false },
+                                                        leadingIcon = { Icon(Icons.Default.Bookmark, null) }
+                                                    )
+                                                    HorizontalDivider()
+                                                    DropdownMenuItem(
+                                                        text = { Text("Modo PC") },
+                                                        onClick = { isPcMode = !isPcMode; webView?.reload(); showMenu = false },
+                                                        leadingIcon = { Icon(Icons.Default.Computer, null) },
+                                                        trailingIcon = { Checkbox(checked = isPcMode, onCheckedChange = null) }
+                                                    )
+                                                    DropdownMenuItem(
+                                                        text = { Text("Configuración") },
+                                                        onClick = { currentScreen = BrowserScreen.Settings; showMenu = false },
+                                                        leadingIcon = { Icon(Icons.Default.Settings, null) }
+                                                    )
+                                                }
+                                            }
+                                        }
                                     )
                                     
                                     AnimatedVisibility(
@@ -266,25 +339,6 @@ fun BrowserApp(
                                             }
                                         }
                                     }
-                                }
-                            }
-                        }
-                    },
-                    bottomBar = {
-                        if (!showTabManager) {
-                            BottomAppBar(containerColor = MaterialTheme.colorScheme.surface, contentPadding = PaddingValues(horizontal = 4.dp), modifier = Modifier.height(56.dp).shadow(8.dp) ) {
-                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround, verticalAlignment = Alignment.CenterVertically) {
-                                    IconButton(onClick = { if (webView?.canGoBack() == true) webView?.goBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
-                                    IconButton(onClick = { if (webView?.canGoForward() == true) webView?.goForward() }) { Icon(Icons.AutoMirrored.Filled.ArrowForward, "Forward") }
-                                    
-                                    IconButton(onClick = { showMenu = true }) { Icon(Icons.Default.Menu, "Menu") }
-                                    
-                                    IconButton(onClick = { showTabManager = true }) {
-                                        Box(modifier = Modifier.size(22.dp).border(1.8.dp, MaterialTheme.colorScheme.onSurface, RoundedCornerShape(4.dp)), contentAlignment = Alignment.Center) {
-                                            Text(text = tabs.size.toString(), fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                        }
-                                    }
-                                    IconButton(onClick = { tabs = tabs.toMutableList().apply { this[selectedTabIndex] = this[selectedTabIndex].copy(url = "home") } }) { Icon(Icons.Default.Home, "Home") }
                                 }
                             }
                         }
@@ -357,29 +411,6 @@ fun BrowserApp(
 
         if (showTabManager) {
             TabManagerView(tabs = tabs, selectedIndex = selectedTabIndex, onTabSelected = { index -> selectedTabIndex = index; showTabManager = false }, onTabClosed = { index -> val newList = tabs.toMutableList().apply { removeAt(index) }; if (newList.isEmpty()) { tabs = listOf(TabItem()); selectedTabIndex = 0 } else { tabs = newList; if (selectedTabIndex >= tabs.size) selectedTabIndex = tabs.size - 1 } }, onNewTab = { tabs = tabs + TabItem(); selectedTabIndex = tabs.size - 1; showTabManager = false }, onClose = { showTabManager = false })
-        }
-
-        if (showMenu) {
-            SettingsMenu(
-                onDismiss = { showMenu = false },
-                onHistory = { currentScreen = BrowserScreen.History; showMenu = false },
-                onDownloads = { currentScreen = BrowserScreen.Downloads; showMenu = false },
-                onBookmarks = { currentScreen = BrowserScreen.Bookmarks; showMenu = false },
-                onOpenSettings = { currentScreen = BrowserScreen.Settings; showMenu = false },
-                isPcMode = isPcMode,
-                onPcModeChange = { isPcMode = it; webView?.reload(); showMenu = false },
-                currentUrl = currentTab.url,
-                onFindInPage = { /* Próximamente */ },
-                onPrint = { 
-                    webView?.let { view ->
-                        (context as? Activity)?.let { activity ->
-                            val printManager = activity.getSystemService(Context.PRINT_SERVICE) as PrintManager
-                            val printAdapter = view.createPrintDocumentAdapter("Ember Document")
-                            printManager.print("Ember Print", printAdapter, null)
-                        }
-                    }
-                }
-            )
         }
 
         if (showSecurityInfo) {
