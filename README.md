@@ -35,6 +35,10 @@ Ember is a modern, fast, and secure Android web browser designed with a focus on
 - **🏠 Custom Home**: Improved start page with quick links and smart search.
 - **🛠️ Robust Error Handling**: Custom "x _ x" error screen with technical details and easy retry.
 
+<a href="https://aura-repo.infinityfreeapp.com/index?appid=com.juanoto2012.openmaps">
+  <img src="https://aura-repo.infinityfreeapp.com/badge.png" alt="Get it on Aura Repo" width="322">
+</a>
+
 ## 🛠️ Technologies Used
 
 - **Language**: Kotlin
